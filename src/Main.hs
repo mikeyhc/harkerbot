@@ -2,6 +2,7 @@ import Control.Arrow
 import Control.Exception.Base
 import Control.Monad.Reader
 import Control.Monad.State
+import Data.Char
 import Data.List
 import Network
 import System.Exit
@@ -17,11 +18,12 @@ data BotBrain = BotBrain { botauth :: Maybe User }
 type Bot a = ReaderT BotCore (StateT BotBrain IO) a
 
 emptyBrain = BotBrain Nothing
-pass   = "harker"
-server = "segfault.net.nz"
-port   = 6667
-chan   = "#bots"
-nick   = "harker"
+pass      = "harker"
+server    = "segfault.net.nz"
+port      = 6667
+chan      = "#bots"
+nick      = "harker"
+honklimit = 7 
 
 main :: IO ()
 main = bracket connect 
@@ -58,8 +60,8 @@ write s t = do
 listen :: Handle -> Bot ()
 listen h = loopfunc $ do
     s <- liftIO $ fmap init (hGetLine h)
-    if ping s then pong s else eval (clean s)
     liftIO $ printf "< %s\n" s
+    if ping s then pong s else eval (clean s)
     where
         loopfunc a = a >> loopfunc a
         clean x = let msg = drop 1 . dropWhile (/= ':') $ drop 1 x
@@ -73,9 +75,12 @@ listen h = loopfunc $ do
 eval :: (User, String, String) -> Bot ()
 eval (u, c, "!quit")   = runauth u c quitfunc 
 eval (u, c, "!uptime") = uptime >>= privmsg u c
+eval (u, c, "!hauth")  = privmsg u c "needs a password idiot"
 eval (u, c, x) 
     | "!id " `isPrefixOf` x    = privmsg u c (drop 4 x)
     | "!hauth " `isPrefixOf` x = auth u (drop 7 x) >>= privmsg u c
+    | map toLower x == "honk"  = sequence_ . take honklimit 
+                               $ repeat (privmsg u c x)
     | checkReg x               = ircInit
     | otherwise                = return ()
 
