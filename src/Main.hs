@@ -1,3 +1,4 @@
+import Control.Applicative
 import Control.Arrow
 import Control.Exception.Base
 import Control.Monad.Reader
@@ -14,10 +15,12 @@ type User = String
 data BotCore  = BotCore { socket    :: Handle 
                         , starttime :: ClockTime
                         }
-data BotBrain = BotBrain { botauth :: Maybe User } 
+data BotBrain = BotBrain { botauth  :: Maybe User
+                         , honkslam :: Bool
+                         }
 type Bot a = ReaderT BotCore (StateT BotBrain IO) a
 
-emptyBrain = BotBrain Nothing
+emptyBrain = BotBrain Nothing False
 pass      = "harker"
 server    = "segfault.net.nz"
 port      = 6667
@@ -73,19 +76,33 @@ listen h = loopfunc $ do
         pong = write "PONG" . (':' :) . drop 6 
 
 eval :: (User, String, String) -> Bot ()
-eval (u, c, "!quit")   = runauth u c quitfunc 
-eval (u, c, "!uptime") = uptime >>= privmsg u c
-eval (u, c, "!hauth")  = privmsg u c "needs a password idiot"
+eval (u, c, "!quit")     = runauth u c quitfunc 
+eval (u, c, "!uptime")   = uptime >>= privmsg u c
+eval (u, c, "!hauth")    = privmsg u c "needs a password idiot"
+eval (u, c, "!honkslam") = runauth u c (togglehonkslam u c)
 eval (u, c, x) 
     | "!id " `isPrefixOf` x    = privmsg u c (drop 4 x)
     | "!hauth " `isPrefixOf` x = auth u (drop 7 x) >>= privmsg u c
-    | map toLower x == "honk"  = sequence_ . take honklimit 
-                               $ repeat (privmsg u c x)
+    | map toLower x == "honk"  = hslam u c x
     | checkReg x               = ircInit
     | otherwise                = return ()
 
+hslam :: User -> String -> String -> Bot ()
+hslam u c x = do
+    honk <- gets honkslam
+    if honk then sequence_ . take honklimit $ repeat (privmsg u c x)
+            else return ()
+
 quitfunc :: Bot ()
 quitfunc = write "QUIT" ":Exiting" >> liftIO exitSuccess
+
+togglehonkslam :: ser -> String -> Bot ()
+togglehonkslam u c = do
+    h <- not <$> gets honkslam
+    modify (togglehonk h)
+    privmsg u c $ "honkslam is now " ++ if h then "on" else "off"
+    where
+        togglehonk h x = x { honkslam = h }
 
 privmsg :: User -> String -> String -> Bot ()
 privmsg u c s = if head c == '#' then write "PRIVMSG" (c ++ " :" ++ s)
