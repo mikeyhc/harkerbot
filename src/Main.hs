@@ -11,7 +11,11 @@ import System.Time
 import System.IO
 import Text.Printf
 
+type Nick = String
 type User = String
+type Chan = String
+type Message = String
+
 data BotCore  = BotCore { socket    :: Handle 
                         , starttime :: ClockTime
                         }
@@ -19,6 +23,11 @@ data BotBrain = BotBrain { botauth  :: Maybe User
                          , honkslam :: Bool
                          }
 type Bot a = ReaderT BotCore (StateT BotBrain IO) a
+data IRCMessage = IRCMessage { ircnick :: Nick
+                             , ircuser :: User
+                             , ircchan :: Chan
+                             , ircmsg  :: Message
+                             }
 
 emptyBrain = BotBrain Nothing False
 pass      = "harker"
@@ -54,7 +63,7 @@ ircInit = do
     write "USER" $ nick ++ " 0 * :harker bot"
     write "JOIN" chan
 
-write :: String -> String -> Bot ()
+write :: String -> Message -> Bot ()
 write s t = do
     h <- asks socket
     liftIO $ hPrintf h "%s %s\r\n" s t
@@ -64,49 +73,61 @@ listen :: Handle -> Bot ()
 listen h = loopfunc $ do
     s <- liftIO $ fmap init (hGetLine h)
     liftIO $ printf "< %s\n" s
-    if ping s then pong s else eval (clean s)
+    if ping s then pong s else eval (parseMessage s)
     where
         loopfunc a = a >> loopfunc a
-        clean x = let msg = drop 1 . dropWhile (/= ':') $ drop 1 x
-                      usr = takeWhile (/= '!') $ drop 1 x
-                      drp = drop 1 . dropWhile (/= ' ')
-                      chn = takeWhile (/= ' ') . drp . drp  $ drop 1 x
-                  in  (usr, chn, msg)
         ping = ("PING :" `isPrefixOf`)
         pong = write "PONG" . (':' :) . drop 6 
 
-eval :: (User, String, String) -> Bot ()
-eval (u, c, "!quit")     = runauth u c quitfunc 
-eval (u, c, "!uptime")   = uptime >>= privmsg u c
-eval (u, c, "!hauth")    = privmsg u c "needs a password idiot"
-eval (u, c, "!honkslam") = runauth u c (togglehonkslam u c)
-eval (u, c, x) 
-    | "!id " `isPrefixOf` x    = privmsg u c (drop 4 x)
-    | "!hauth " `isPrefixOf` x = auth u (drop 7 x) >>= privmsg u c
-    | map toLower x == "honk"  = hslam u c x
-    | checkReg x               = ircInit
+parseMessage :: Message -> IRCMessage
+parseMessage x = let (nick, a)   = second tail' . break (== '!') $ tail' x
+                     a'          = case a of
+                                      '~':r -> r
+                                      _     -> a
+                     (user, b)   = second tail' $ break (== ' ') a'
+                     b'          = tail' $ dropWhile (/= ' ') b
+                     (chan, msg) = second (tail' . tail') $ break (== ' ') b'
+                     trimmeta    = tail' . dropWhile (/= ':') . tail'
+                 in if msg == [] then IRCMessage "" "" "" (trimmeta x) 
+                                 else IRCMessage nick user chan msg
+
+tail' :: [a] -> [a]
+tail' (_:xs) = xs
+tail' _      = []
+
+eval :: IRCMessage -> Bot ()
+eval (IRCMessage n u c m)
+    | m == "!quit"             = runauth n u c quitfunc 
+    | m == "!uptime"           = uptime >>= privmsg n c
+    | m == "!honkslam"         = runauth n u c (togglehonkslam n u c)
+    | m == "!hauth"            = privmsg n c "needs a password idiot"
+    | "!hauth " `isPrefixOf` m = auth u (drop 7 m) >>= privmsg n c
+    | m == "!hunauth"          = runauth n u c (unauth n u c)
+    | "!id " `isPrefixOf` m    = privmsg n c (drop 4 m)
+    | map toLower m == "honk"  = hslam n c m
+    | checkReg m               = ircInit
     | otherwise                = return ()
 
-hslam :: User -> String -> String -> Bot ()
-hslam u c x = do
+hslam :: Nick -> Chan -> Message -> Bot ()
+hslam n c m = do
     honk <- gets honkslam
-    if honk then sequence_ . take honklimit $ repeat (privmsg u c x)
+    if honk then sequence_ . take honklimit $ repeat (privmsg n c m)
             else return ()
 
 quitfunc :: Bot ()
 quitfunc = write "QUIT" ":Exiting" >> liftIO exitSuccess
 
-togglehonkslam :: ser -> String -> Bot ()
-togglehonkslam u c = do
+togglehonkslam :: Nick -> User -> Chan -> Bot ()
+togglehonkslam n u c = do
     h <- not <$> gets honkslam
     modify (togglehonk h)
-    privmsg u c $ "honkslam is now " ++ if h then "on" else "off"
+    privmsg n c $ "honkslam is now " ++ if h then "on" else "off"
     where
         togglehonk h x = x { honkslam = h }
 
-privmsg :: User -> String -> String -> Bot ()
-privmsg u c s = if head c == '#' then write "PRIVMSG" (c ++ " :" ++ s)
-                                 else write "PRIVMSG" (u ++ " :" ++ s)
+privmsg :: Nick -> Chan -> Message -> Bot ()
+privmsg n c s = if head c == '#' then write "PRIVMSG" (c ++ " :" ++ s)
+                                 else write "PRIVMSG" (n ++ " :" ++ s)
 
 checkReg :: String -> Bool
 checkReg = (==) "You have not registered"
@@ -135,20 +156,25 @@ auth u p = do
         Just a -> return "somebody has already authenticated"
         _      -> do
             if p == pass then do
-                modify (setauth u)
+                modify (setauth $ Just u)
                 return $ "you have successfully authenticated as " ++ u
             else return "incorrect password"
 
-setauth :: User -> BotBrain -> BotBrain
-setauth u b = b { botauth = Just u }
+setauth :: Maybe User -> BotBrain -> BotBrain
+setauth u b = b { botauth = u }
 
 isauth :: User -> BotBrain -> Bool
 isauth u b = case botauth b of
                 Just a -> a == u
                 _      -> False
 
-runauth :: User -> String -> Bot () -> Bot ()
-runauth u c f = do
+unauth :: Nick -> User -> Chan -> Bot ()
+unauth n u c = do
+    modify (setauth Nothing)
+    privmsg n c "you have unauthenticated"
+
+runauth :: Nick -> User -> Chan -> Bot () -> Bot ()
+runauth n u c f = do
     brain <- get
     if isauth u brain then f
-                      else privmsg u c "you are not authenticated for that"
+                      else privmsg n c "you are not authenticated for that"
