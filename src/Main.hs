@@ -19,8 +19,9 @@ type Message = String
 data BotCore  = BotCore { socket    :: Handle 
                         , starttime :: ClockTime
                         }
-data BotBrain = BotBrain { botauth  :: Maybe User
-                         , honkslam :: Bool
+data BotBrain = BotBrain { botauth   :: Maybe User
+                         , honkslam  :: Bool
+                         , pingalert :: Bool
                          }
 type Bot a = ReaderT BotCore (StateT BotBrain IO) a
 data IRCMessage = IRCMessage { ircnick :: Nick
@@ -29,7 +30,7 @@ data IRCMessage = IRCMessage { ircnick :: Nick
                              , ircmsg  :: Message
                              }
 
-emptyBrain = BotBrain Nothing False
+emptyBrain = BotBrain Nothing False False
 pass      = "harker"
 server    = "segfault.net.nz"
 port      = 6667
@@ -73,7 +74,12 @@ listen :: Handle -> Bot ()
 listen h = loopfunc $ do
     s <- liftIO $ fmap init (hGetLine h)
     liftIO $ printf "< %s\n" s
-    if ping s then pong s else eval (parseMessage s)
+    if ping s then do 
+            pong s
+            pa <- gets pingalert
+            if pa then write "PRIVMSG " (chan ++ " :ping <---> pong")
+                  else return ()
+        else eval (parseMessage s)
     where
         loopfunc a = a >> loopfunc a
         ping = ("PING :" `isPrefixOf`)
@@ -100,6 +106,7 @@ eval (IRCMessage n u c m)
     | m == "!quit"             = runauth n u c quitfunc 
     | m == "!uptime"           = uptime >>= privmsg n c
     | m == "!honkslam"         = runauth n u c (togglehonkslam n u c)
+    | m == "!pingalert"        = runauth n u c (togglepingalert n u c)
     | m == "!hauth"            = privmsg n c "needs a password idiot"
     | "!hauth " `isPrefixOf` m = auth u (drop 7 m) >>= privmsg n c
     | m == "!hunauth"          = runauth n u c (unauth n u c)
@@ -124,6 +131,14 @@ togglehonkslam n u c = do
     privmsg n c $ "honkslam is now " ++ if h then "on" else "off"
     where
         togglehonk h x = x { honkslam = h }
+
+togglepingalert :: Nick -> User -> Chan -> Bot ()
+togglepingalert n u c = do
+    p <- not <$> gets pingalert
+    modify (toggleping p)
+    privmsg n c $ "pingalert is now " ++ if p then "on" else "off"
+    where
+        toggleping p x = x { pingalert = p }
 
 privmsg :: Nick -> Chan -> Message -> Bot ()
 privmsg n c s = if head c == '#' then write "PRIVMSG" (c ++ " :" ++ s)
