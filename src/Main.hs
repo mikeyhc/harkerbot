@@ -5,16 +5,12 @@ import Control.Monad.Reader
 import Control.Monad.State
 import Data.Char
 import Data.List
+import HarkerIRC.Types
 import Network
 import System.Exit
 import System.Time
 import System.IO
 import Text.Printf
-
-type Nick = String
-type User = String
-type Chan = String
-type Message = String
 
 data BotCore  = BotCore { socket    :: Handle 
                         , starttime :: ClockTime
@@ -24,11 +20,6 @@ data BotBrain = BotBrain { botauth   :: Maybe User
                          , pingalert :: Bool
                          }
 type Bot a = ReaderT BotCore (StateT BotBrain IO) a
-data IRCMessage = IRCMessage { ircnick :: Nick
-                             , ircuser :: User
-                             , ircchan :: Chan
-                             , ircmsg  :: Message
-                             }
 
 emptyBrain = BotBrain Nothing False False
 pass      = "harker"
