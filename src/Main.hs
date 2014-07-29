@@ -21,6 +21,9 @@ data BotBrain = BotBrain { botauth   :: Maybe User
                          }
 type Bot a = ReaderT BotCore (StateT BotBrain IO) a
 
+runbot :: BotBrain -> BotCore -> IO ()
+runbot bb bc = runStateT (runReaderT run bc) bb >> return ()
+
 emptyBrain = BotBrain Nothing False False
 pass      = "harker"
 server    = "segfault.net.nz"
@@ -32,7 +35,7 @@ honklimit = 7
 main :: IO ()
 main = bracket connect 
     (hClose . socket) 
-    (\bc -> runStateT (runReaderT run bc) emptyBrain >> return ())
+    (runbot emptyBrain)
 
 connect :: IO BotCore
 connect = notify $ do
@@ -70,30 +73,30 @@ listen h = loopfunc $ do
             pa <- gets pingalert
             if pa then write "PRIVMSG " (chan ++ " :ping <---> pong")
                   else return ()
-        else eval (parseMessage s)
+        else case parseRawIRC s of
+            Left  a -> evalsys a
+            Right b -> evalpriv b
     where
         loopfunc a = a >> loopfunc a
         ping = ("PING :" `isPrefixOf`)
         pong = write "PONG" . (':' :) . drop 6 
 
-parseMessage :: Message -> IRCMessage
-parseMessage x = let (nick, a)   = second tail' . break (== '!') $ tail' x
-                     a'          = case a of
-                                      '~':r -> r
-                                      _     -> a
-                     (user, b)   = second tail' $ break (== ' ') a'
-                     b'          = tail' $ dropWhile (/= ' ') b
-                     (chan, msg) = second (tail' . tail') $ break (== ' ') b'
-                     trimmeta    = tail' . dropWhile (/= ':') . tail'
-                 in if msg == [] then IRCMessage "" "" "" (trimmeta x) 
-                                 else IRCMessage nick user chan msg
+parseRawIRC :: RawIRCString -> Either IRCSystemMsg IRCInPrivMsg
+parseRawIRC s = let (n, a) = second tail' . break (== '!') $ tail' s
+                    a'     = case a of { '~':xs -> xs; _ -> a }
+                    (u, b) = second tail' $ break (== ' ') a'
+                    b'     = tail' $ dropWhile (/= ' ') b
+                    (c, m) = second (tail' . tail') $ break (== ' ') b'
+                    getmsg = tail' . dropWhile (/= ':') . tail'
+                in if m == [] then Left  . IRCSystemMsg $ getmsg s
+                              else Right $ IRCInPrivMsg n u False c m
 
 tail' :: [a] -> [a]
 tail' (_:xs) = xs
 tail' _      = []
 
-eval :: IRCMessage -> Bot ()
-eval (IRCMessage n u c m)
+evalpriv :: IRCInPrivMsg -> Bot ()
+evalpriv msg
     | m == "!quit"             = runauth n u c quitfunc 
     | m == "!uptime"           = uptime >>= privmsg n c
     | m == "!honkslam"         = runauth n u c (togglehonkslam n u c)
@@ -103,8 +106,19 @@ eval (IRCMessage n u c m)
     | m == "!hunauth"          = runauth n u c (unauth n u c)
     | "!id " `isPrefixOf` m    = privmsg n c (drop 4 m)
     | map toLower m == "honk"  = hslam n c m
-    | checkReg m               = ircInit
     | otherwise                = return ()
+    where
+        n = ircNick msg
+        m = ircMsg  msg
+        u = ircUser msg
+        c = ircChan msg
+
+evalsys :: IRCSystemMsg -> Bot ()
+evalsys msg 
+    | checkReg m = ircInit
+    | otherwise  = return ()
+    where
+        m = getIRCSysMsg msg
 
 hslam :: Nick -> Chan -> Message -> Bot ()
 hslam n c m = do
