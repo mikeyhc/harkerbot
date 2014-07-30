@@ -3,8 +3,8 @@
 
 name:                harkerbot
 version:             0.1.0.0
-synopsis:            A simple markov bot
-description:         A IRC bot that provides random quotes using a markov bot
+synopsis:            An IRC bot server
+description:         An IRC bot that provides a simple plugin interface
 license:             BSD3
 license-file:        LICENSE
 author:              mikeyhc
@@ -15,7 +15,7 @@ build-type:          Simple
 -- extra-source-files:  
 cabal-version:       >=1.10
 
-executable harkerbot-server
+executable harker-server
   main-is:             Main.hs
   -- other-modules:       
   -- other-extensions:    

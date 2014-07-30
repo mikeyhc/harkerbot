@@ -7,45 +7,105 @@ import Data.Char
 import Data.List
 import HarkerIRC.Types
 import Network
+import System.Console.GetOpt
+import System.Environment
 import System.Exit
 import System.Time
 import System.IO
 import Text.Printf
 
+data CmdFlag 
+    = SetNick String
+    | SetPass String
+    | SetServer String
+    | SetPort String
+    | SetChan String
+    | SetMaxLine String
+
 data BotCore  = BotCore { socket    :: Handle 
                         , starttime :: ClockTime
+                        , nick      :: String
+                        , pass      :: String
+                        , chan      :: String
+                        , maxlines  :: Int
                         }
 data BotBrain = BotBrain { botauth   :: Maybe User
                          , honkslam  :: Bool
                          , pingalert :: Bool
                          }
 type Bot a = ReaderT BotCore (StateT BotBrain IO) a
+type OptSet = (String, String, String, Int, String, Int)
 
 runbot :: BotBrain -> BotCore -> IO ()
 runbot bb bc = runStateT (runReaderT run bc) bb >> return ()
 
 emptyBrain = BotBrain Nothing False False
-pass      = "harker"
-server    = "segfault.net.nz"
-port      = 6667
-chan      = "#bots"
-nick      = "harker"
-honklimit = 7 
+defpass      = "harker"
+defserver    = "segfault.net.nz"
+defport      = 6667
+defchan      = "#bots"
+defnick      = "harker"
+defmaxlines  = 7
 
+options = [Option ['n'] []  (ReqArg SetNick "NICK")
+            "Set the default nick for the bot"
+          ,Option ['p'] []  (ReqArg SetPass "PASS")
+            "Set the authentication password"
+          ,Option ['H'] []  (ReqArg SetServer "HOST")  
+            "Sets the host to connect to"
+          ,Option ['P'] []  (ReqArg SetPort "PORT")
+            "Sets the port to connect on"
+          ,Option ['c'] []  (ReqArg SetChan "CHANNEL")
+            "Sets the channel to connect to"
+          ,Option ['m'] []  (ReqArg SetMaxLine "MAXLINES") 
+            "Set the maximum lines printed in a public channel"
+          ]
+
+emptyOptSet :: OptSet
+emptyOptSet = (defnick, defpass, defserver, defport, defchan, defmaxlines)
+
+parseopts :: [String] -> Either String OptSet
+parseopts argv = case getOpt Permute options argv of 
+    (args, _, []  ) -> Right $ foldr parsearg emptyOptSet args
+    (_,    _, errs) -> Left $ concat errs ++ usageInfo header options
+    where header = "Usage: harker-server [OPTIONS..]"
+
+_first  g (a, b, c, d, e, f) = (g a, b, c, d, e, f)
+_second g (a, b, c, d, e, f) = (a, g b, c, d, e, f)
+_third  g (a, b, c, d, e, f) = (a, b, g c, d, e, f)
+_fourth g (a, b, c, d, e, f) = (a, b, c, g d, e, f)
+_fifth  g (a, b, c, d, e, f) = (a, b, c, d, g e, f)
+_sixth  g (a, b, c, d, e, f) = (a, b, c, d, e, g f)
+
+parsearg :: CmdFlag -> OptSet -> OptSet
+parsearg (SetNick x)    = _first  (const x)
+parsearg (SetPass x)    = _second (const x)
+parsearg (SetServer x)  = _third  (const x)
+parsearg (SetPort x)    = _fourth (const $ read x)
+parsearg (SetChan x)    = _fifth  (const x)
+parsearg (SetMaxLine x) = _sixth  (const $ read x)
+                             
 main :: IO ()
-main = bracket connect 
-    (hClose . socket) 
-    (runbot emptyBrain)
+main = do
+    opts <- fmap parseopts getArgs
+    case opts of 
+        Left msg -> do  
+            hPutStr stderr msg
+            exitFailure
+        Right o  -> bracket (connect o)
+            (hClose . socket) 
+            (runbot emptyBrain)
 
-connect :: IO BotCore
-connect = notify $ do
-    t <- getClockTime
-    h <- connectTo server (PortNumber (fromIntegral port))
-    hSetBuffering h NoBuffering
-    return $ BotCore h t
+connect :: OptSet -> IO BotCore
+connect (n, pa, s, po, c, m) = notify s po $ do
+        t <- getClockTime
+        h <- connectTo s (PortNumber (fromIntegral po))
+        hSetBuffering h NoBuffering
+        return $ BotCore h t n pa c m
     where
-        notify = bracket_
-            (printf "Connecting to %s..." server >> hFlush stdout)
+        notify :: String -> Int -> IO a -> IO a
+        notify a b = bracket_
+            (printf "Connecting to %s:%d..." a b >> hFlush stdout)
             (printf "done.\n")
 
 run :: Bot ()
@@ -54,9 +114,11 @@ run = ircInit >> asks socket >>= listen
 ircInit :: Bot ()
 ircInit = do
     h <- asks socket
-    write "NICK" nick
-    write "USER" $ nick ++ " 0 * :harker bot"
-    write "JOIN" chan
+    n <- asks nick
+    c <- asks chan
+    write "NICK" n
+    write "USER" $ n ++ " 0 * :harker bot"
+    write "JOIN" c
 
 write :: String -> Message -> Bot ()
 write s t = do
@@ -70,8 +132,9 @@ listen h = loopfunc $ do
     liftIO $ printf "< %s\n" s
     if ping s then do 
             pong s
+            c  <- asks chan
             pa <- gets pingalert
-            if pa then write "PRIVMSG " (chan ++ " :ping <---> pong")
+            if pa then write "PRIVMSG " (c ++ " :ping <---> pong")
                   else return ()
         else case parseRawIRC s of
             Left  a -> evalsys a
@@ -123,7 +186,8 @@ evalsys msg
 hslam :: Nick -> Chan -> Message -> Bot ()
 hslam n c m = do
     honk <- gets honkslam
-    if honk then sequence_ . take honklimit $ repeat (privmsg n c m)
+    ml <- asks maxlines
+    if honk then sequence_ . take ml $ repeat (privmsg n c m)
             else return ()
 
 quitfunc :: Bot ()
@@ -175,7 +239,8 @@ auth u p = do
     case ma of
         Just a -> return "somebody has already authenticated"
         _      -> do
-            if p == pass then do
+            p' <- asks pass
+            if p == p' then do
                 modify (setauth $ Just u)
                 return $ "you have successfully authenticated as " ++ u
             else return "incorrect password"
