@@ -1,5 +1,7 @@
 import Control.Applicative
 import Control.Arrow
+import Control.Concurrent (forkFinally, MVar, newEmptyMVar, putMVar, takeMVar
+                          ,yield, ThreadId, tryTakeMVar, readMVar)
 import Control.Exception.Base
 import Control.Monad.Reader
 import Control.Monad.State
@@ -8,6 +10,7 @@ import Data.List
 import HarkerIRC.Types
 import Network
 import System.Console.GetOpt
+import System.Directory
 import System.Environment
 import System.Exit
 import System.Time
@@ -24,22 +27,46 @@ data CmdFlag
 
 data BotCore  = BotCore { socket    :: Handle 
                         , starttime :: ClockTime
+                        , plugintid :: ThreadId
                         , nick      :: String
                         , pass      :: String
                         , chan      :: String
                         , maxlines  :: Int
                         }
-data BotBrain = BotBrain { botauth   :: Maybe User
-                         , honkslam  :: Bool
-                         , pingalert :: Bool
+data BotBrain = BotBrain { botauth      :: Maybe User
+                         , honkslam     :: Bool
+                         , pingalert    :: Bool
+                         , plugins      :: MVar [Plugin]
+                         , childstatus  :: MVar Status
                          }
-type Bot a = ReaderT BotCore (StateT BotBrain IO) a
-type OptSet = (String, String, String, Int, String, Int)
+data PluginCore = PluginCore { pluginVar  :: MVar [Plugin]
+                             , statusVar  :: MVar Status
+                             , pluginSock :: Socket
+                             }
+data Status = Starting | Running | Dead
+
+isRunning Running  = True
+isRunning Starting = True
+isRunning _        = False
+
+type Plugin         = (String, String, Handle) -- name, version, socket
+type Bot a          = ReaderT BotCore (StateT BotBrain IO) a
+type PluginThread a = StateT PluginCore IO a
+type OptSet         = (String, String, String, Int, String, Int)
 
 runbot :: BotBrain -> BotCore -> IO ()
 runbot bb bc = runStateT (runReaderT run bc) bb >> return ()
 
-emptyBrain = BotBrain Nothing False False
+runPluginThread :: PluginCore -> IO ()
+runPluginThread pc = runStateT pluginThread pc >> return ()
+
+emptyBrain :: IO BotBrain
+emptyBrain = do
+    v <- newEmptyMVar
+    putMVar v []
+    d <- newEmptyMVar
+    return $ BotBrain Nothing False False v d
+
 defpass      = "harker"
 defserver    = "segfault.net.nz"
 defport      = 6667
@@ -88,32 +115,70 @@ parsearg (SetMaxLine x) = _sixth  (const $ read x)
 main :: IO ()
 main = do
     opts <- fmap parseopts getArgs
+    brain <- emptyBrain
     case opts of 
         Left msg -> do  
             hPutStr stderr msg
             exitFailure
-        Right o  -> bracket (connect o)
+        Right o  -> bracket ( 
+                startPluginThread (plugins brain) (childstatus brain)
+                >>= connect o (plugins brain) (childstatus brain))
             (hClose . socket) 
-            (runbot emptyBrain)
+            (runbot brain)
 
-connect :: OptSet -> IO BotCore
-connect (n, pa, s, po, c, m) = notify s po $ do
+startPluginThread :: MVar [Plugin] -> MVar Status -> IO ThreadId
+startPluginThread pl cs = do
+        putMVar cs Starting
+        tid <- forkFinally (pluginListener pl cs) 
+                           (\_ -> closeplugins pl >> takeMVar cs 
+                                  >> putMVar cs Dead)
+        v <- readMVar cs
+        if isRunning v then return tid
+        else hPutStr stderr ("Couldn't open " ++ unixaddr) >> exitFailure
+
+connect :: OptSet -> MVar [Plugin] -> MVar Status -> ThreadId -> IO BotCore
+connect (n, pa, s, po, c, m) pl cs tid = notify s po $ do
         t <- getClockTime
         h <- connectTo s (PortNumber (fromIntegral po))
         hSetBuffering h NoBuffering
-        return $ BotCore h t n pa c m
+        return $ BotCore h t tid n pa c m
     where
         notify :: String -> Int -> IO a -> IO a
         notify a b = bracket_
-            (printf "Connecting to %s:%d..." a b >> hFlush stdout)
-            (printf "done.\n")
+            (printf "Connecting to %s:%d...\n" a b >> hFlush stdout)
+            (printf "Connected to %s.\n" a)
+
+pluginListener :: MVar [Plugin] -> MVar Status -> IO ()
+pluginListener pl status = do
+    printf "Starting Plugin Thread\n"
+    bracket (connectUnixPlugin pl status) (sClose . pluginSock) 
+            runPluginThread
+
+closeplugins :: MVar [Plugin] -> IO ()
+closeplugins pl = takeMVar pl >>= mapM_ (\(_,_,h) -> hClose h) 
+                  >> putMVar pl []
+
+unixaddr = "/tmp/.harker-server.sock"
+unixSocket = UnixSocket unixaddr
+
+connectUnixPlugin :: MVar [Plugin] -> MVar Status -> IO PluginCore
+connectUnixPlugin p s = do
+    fe <- doesFileExist unixaddr
+    if fe then removeFile unixaddr else return ()
+    r <- PluginCore p s <$> listenOn unixSocket
+    putStrLn $ unixaddr ++ " opened"
+    _ <- takeMVar  s
+    putMVar s Running
+    return r
+
+pluginThread :: PluginThread ()
+pluginThread = pluginThread 
 
 run :: Bot ()
 run = ircInit >> asks socket >>= listen
 
 ircInit :: Bot ()
 ircInit = do
-    h <- asks socket
     n <- asks nick
     c <- asks chan
     write "NICK" n
@@ -128,17 +193,23 @@ write s t = do
 
 listen :: Handle -> Bot ()
 listen h = loopfunc $ do
-    s <- liftIO $ fmap init (hGetLine h)
-    liftIO $ printf "< %s\n" s
-    if ping s then do 
-            pong s
-            c  <- asks chan
-            pa <- gets pingalert
-            if pa then write "PRIVMSG " (c ++ " :ping <---> pong")
-                  else return ()
-        else case parseRawIRC s of
-            Left  a -> evalsys a
-            Right b -> evalpriv b
+    cs <- gets childstatus 
+    c  <- liftIO $ takeMVar cs
+    if not (isRunning c) 
+        then quitfunc "Plugin thread died"
+        else do
+            liftIO $ putMVar cs c
+            s <- liftIO $ fmap init (hGetLine h)
+            liftIO $ printf "< %s\n" s
+            if ping s then do 
+                    pong s
+                    c  <- asks chan
+                    pa <- gets pingalert
+                    if pa then write "PRIVMSG " (c ++ " :ping <---> pong")
+                          else return ()
+                else case parseRawIRC s of
+                    Left  a -> evalsys a
+                    Right b -> evalpriv b
     where
         loopfunc a = a >> loopfunc a
         ping = ("PING :" `isPrefixOf`)
@@ -160,7 +231,7 @@ tail' _      = []
 
 evalpriv :: IRCInPrivMsg -> Bot ()
 evalpriv msg
-    | m == "!quit"             = runauth n u c quitfunc 
+    | m == "!quit"             = runauth n u c (quitfunc "Exiting")
     | m == "!uptime"           = uptime >>= privmsg n c
     | m == "!honkslam"         = runauth n u c (togglehonkslam n u c)
     | m == "!pingalert"        = runauth n u c (togglepingalert n u c)
@@ -190,8 +261,8 @@ hslam n c m = do
     if honk then sequence_ . take ml $ repeat (privmsg n c m)
             else return ()
 
-quitfunc :: Bot ()
-quitfunc = write "QUIT" ":Exiting" >> liftIO exitSuccess
+quitfunc :: Message -> Bot ()
+quitfunc s = write "QUIT" (":" ++ s) >> liftIO exitSuccess
 
 togglehonkslam :: Nick -> User -> Chan -> Bot ()
 togglehonkslam n u c = do
