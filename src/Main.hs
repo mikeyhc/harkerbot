@@ -1,12 +1,18 @@
+{-# LANGUAGE DeriveDataTypeable #-}
+
 import Control.Applicative
 import Control.Arrow
 import Control.Concurrent (forkFinally, MVar, newEmptyMVar, putMVar, takeMVar
-                          ,yield, ThreadId, tryTakeMVar, readMVar)
+                          ,yield, ThreadId, tryTakeMVar, readMVar, newMVar
+                          ,threadDelay, modifyMVar_)
+import Control.Exception
 import Control.Exception.Base
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.Char
 import Data.List
+import Data.Maybe
+import Data.Typeable
 import HarkerIRC.Types
 import Network
 import System.Console.GetOpt
@@ -14,6 +20,7 @@ import System.Directory
 import System.Environment
 import System.Exit
 import System.Time
+import System.Timeout
 import System.IO
 import Text.Printf
 
@@ -44,6 +51,9 @@ data PluginCore = PluginCore { pluginVar  :: MVar [Plugin]
                              , pluginSock :: Socket
                              }
 data Status = Starting | Running | Dead
+data TimeOutException = TimeOutException
+    deriving (Show, Typeable)
+instance Exception TimeOutException
 
 isRunning Running  = True
 isRunning Starting = True
@@ -51,14 +61,14 @@ isRunning _        = False
 
 type Plugin         = (String, String, Handle) -- name, version, socket
 type Bot a          = ReaderT BotCore (StateT BotBrain IO) a
-type PluginThread a = StateT PluginCore IO a
+type PluginThread a = ReaderT PluginCore IO a
 type OptSet         = (String, String, String, Int, String, Int)
 
 runbot :: BotBrain -> BotCore -> IO ()
 runbot bb bc = runStateT (runReaderT run bc) bb >> return ()
 
 runPluginThread :: PluginCore -> IO ()
-runPluginThread pc = runStateT pluginThread pc >> return ()
+runPluginThread pc = runReaderT pluginThread pc >> return ()
 
 emptyBrain :: IO BotBrain
 emptyBrain = do
@@ -130,8 +140,10 @@ startPluginThread :: MVar [Plugin] -> MVar Status -> IO ThreadId
 startPluginThread pl cs = do
         putMVar cs Starting
         tid <- forkFinally (pluginListener pl cs) 
-                           (\_ -> closeplugins pl >> takeMVar cs 
-                                  >> putMVar cs Dead)
+            (\e -> do { case e of { 
+                        Left err -> putStrLn $ "Exception: " ++ show e;
+                        _        -> return () };
+                    closeplugins pl >> takeMVar cs >> putMVar cs Dead })
         v <- readMVar cs
         if isRunning v then return tid
         else hPutStr stderr ("Couldn't open " ++ unixaddr) >> exitFailure
@@ -172,7 +184,54 @@ connectUnixPlugin p s = do
     return r
 
 pluginThread :: PluginThread ()
-pluginThread = pluginThread 
+pluginThread = do 
+    sock <- asks pluginSock
+    pl <- asks pluginVar
+    (h, hn, _) <- liftIO $ accept sock
+    liftIO $ forkFinally (pluginFromHandle h pl) 
+        (\e -> do 
+            case e of
+                Left err -> putStrLn $ "Exception: " ++ show err 
+                _        -> return ()
+            hClose h)
+    pluginThread 
+
+pluginFromHandle :: Handle -> MVar [Plugin] -> IO ()
+pluginFromHandle h pl = do
+    n <- hGetLine h
+    v <- hGetLine h
+    s <- hGetLine h
+    case parsePluginRegister n v s of 
+        Left msg -> hPutStrLn h msg
+        Right (n', v', s') -> do
+            mh' <- fmap Just (connectTo "localhost" (UnixSocket s')) 
+                `catch` handleException
+            case mh' of
+                Just h' -> do
+                    hPutStrLn h "registed" 
+                    modifyMVar_ pl (\l -> return $ (n', v', h'):l)
+                Nothing -> do
+                    hPutStrLn h $ "could not connect to " ++ s'
+                    return ()
+    where
+        handleException :: SomeException -> IO (Maybe Handle)
+        handleException e = do
+            putStrLn $ "connection exception: " ++ show e
+            return Nothing
+
+parsePluginRegister :: String -> String -> String 
+                    -> Either String (String, String, String)
+parsePluginRegister n v s =
+    let (hn, nv) = splitAt 6 n
+        (vn, vv) = splitAt 9 v
+        (sn, sv) = splitAt 8 s
+    in   if hn == "name: " && nv /= []
+    then if vn == "version: " && vv /= []
+    then if sn == "server: " && sv /= []
+    then Right (nv, vv, sv)
+    else Left "no server component"
+    else Left "no version component"
+    else Left "no name component"
 
 run :: Bot ()
 run = ircInit >> asks socket >>= listen
@@ -236,6 +295,7 @@ evalpriv msg
     | m == "!honkslam"         = runauth n u c (togglehonkslam n u c)
     | m == "!pingalert"        = runauth n u c (togglepingalert n u c)
     | m == "!hauth"            = privmsg n c "needs a password idiot"
+    | m == "!plugins"          = pluginList >>= mapM_ (privmsg n c)
     | "!hauth " `isPrefixOf` m = auth u (drop 7 m) >>= privmsg n c
     | m == "!hunauth"          = runauth n u c (unauth n u c)
     | "!id " `isPrefixOf` m    = privmsg n c (drop 4 m)
@@ -292,6 +352,13 @@ uptime = do
     now  <- liftIO getClockTime
     zero <- asks starttime
     return . prettyClockDiff $ diffClockTimes now zero
+
+pluginList :: Bot [String]
+pluginList = do
+    l <- gets plugins >>= liftIO . readMVar
+    return $ header:map (\(n,v,_) -> "    " ++ n ++ ": v" ++ v) l
+    where
+        header = "registered plugins:"
 
 prettyClockDiff :: TimeDiff -> String
 prettyClockDiff td =
