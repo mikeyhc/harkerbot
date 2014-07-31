@@ -4,7 +4,7 @@ import Control.Applicative
 import Control.Arrow
 import Control.Concurrent (forkFinally, MVar, newEmptyMVar, putMVar, takeMVar
                           ,yield, ThreadId, tryTakeMVar, readMVar, newMVar
-                          ,threadDelay, modifyMVar_)
+                          ,threadDelay, modifyMVar_, forkIO)
 import Control.Exception
 import Control.Exception.Base
 import Control.Monad.Reader
@@ -59,7 +59,8 @@ isRunning Running  = True
 isRunning Starting = True
 isRunning _        = False
 
-type Plugin         = (String, String, Handle) -- name, version, socket
+--                     name,   version, socket, tid
+type Plugin         = (String, String, Handle)
 type Bot a          = ReaderT BotCore (StateT BotBrain IO) a
 type PluginThread a = ReaderT PluginCore IO a
 type OptSet         = (String, String, String, Int, String, Int)
@@ -208,7 +209,7 @@ pluginFromHandle h pl = do
                 `catch` handleException
             case mh' of
                 Just h' -> do
-                    hPutStrLn h "registed" 
+                    hPutStrLn h "registered" 
                     modifyMVar_ pl (\l -> return $ (n', v', h'):l)
                 Nothing -> do
                     hPutStrLn h $ "could not connect to " ++ s'
@@ -225,9 +226,9 @@ parsePluginRegister n v s =
     let (hn, nv) = splitAt 6 n
         (vn, vv) = splitAt 9 v
         (sn, sv) = splitAt 8 s
-    in   if hn == "name: " && nv /= []
+    in   if hn == "name: "    && nv /= []
     then if vn == "version: " && vv /= []
-    then if sn == "server: " && sv /= []
+    then if sn == "server: "  && sv /= []
     then Right (nv, vv, sv)
     else Left "no server component"
     else Left "no version component"
@@ -300,12 +301,21 @@ evalpriv msg
     | m == "!hunauth"          = runauth n u c (unauth n u c)
     | "!id " `isPrefixOf` m    = privmsg n c (drop 4 m)
     | map toLower m == "honk"  = hslam n c m
-    | otherwise                = return ()
+    | otherwise                = pluginBroadcast msg
     where
         n = ircNick msg
         m = ircMsg  msg
         u = ircUser msg
         c = ircChan msg
+
+pluginBroadcast :: IRCInPrivMsg -> Bot ()
+pluginBroadcast msg = do
+    let mstr = foldl (\a b -> a ++ b ++ "\n") "" $ toList msg
+    l <- gets plugins >>= liftIO . readMVar
+    liftIO $ mapM_ (\(_,_,h) -> sendmsg mstr h) l
+
+sendmsg :: String -> Handle -> IO ThreadId
+sendmsg str h = forkIO $ hPutStrLn h str 
 
 evalsys :: IRCSystemMsg -> Bot ()
 evalsys msg 
