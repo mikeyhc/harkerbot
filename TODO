@@ -6,3 +6,5 @@
 * !unplug to unload a loaded plugin
 * refactor into smaller files
 * refactor some to harker-irc
+* remove plugins with broken pipe
+* only allow one of each plugin
