@@ -210,7 +210,8 @@ pluginFromHandle h pl = do
             case mh' of
                 Just h' -> do
                     hPutStrLn h "registered" 
-                    modifyMVar_ pl (\l -> return $ (n', v', h'):l)
+                    modifyMVar_ pl 
+                        (\l -> return $ (n', v', h'):filter (ffilt n') l)
                 Nothing -> do
                     hPutStrLn h $ "could not connect to " ++ s'
                     return ()
@@ -219,6 +220,8 @@ pluginFromHandle h pl = do
         handleException e = do
             putStrLn $ "connection exception: " ++ show e
             return Nothing
+
+        ffilt a (b, _, _) = a /= b
 
 parsePluginRegister :: String -> String -> String 
                     -> Either String (String, String, String)
@@ -289,6 +292,19 @@ tail' :: [a] -> [a]
 tail' (_:xs) = xs
 tail' _      = []
 
+helpList :: [String]
+helpList = 
+    [ "!hauth:     authenticate with harkerbot"
+    , "!help:      this dialog"
+    , "!hunauth:   unauthenticate with harkerbot"
+    , "!pingalert: print a message in the default channel when a ping \
+        \is recieved"
+    , "!plugins:   list all current plugins"
+    , "!quit:      force harkerbot to shutdown"
+    , "!unplug:    remove a plugin"
+    , "!uptime:    show how long harkerbot has been running"
+    ]
+
 evalpriv :: IRCInPrivMsg -> Bot ()
 evalpriv msg
     | m == "!quit"             = runauth n u c (quitfunc "Exiting")
@@ -297,6 +313,7 @@ evalpriv msg
     | m == "!pingalert"        = runauth n u c (togglepingalert n u c)
     | m == "!hauth"            = privmsg n c "needs a password idiot"
     | m == "!plugins"          = pluginList >>= mapM_ (privmsg n c)
+    | m == "!help"             = mapM_ (privmsg n c) helpList
     | "!hauth " `isPrefixOf` m = auth u (drop 7 m) >>= privmsg n c
     | m == "!hunauth"          = runauth n u c (unauth n u c)
     | "!id " `isPrefixOf` m    = privmsg n c (drop 4 m)

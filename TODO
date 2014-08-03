@@ -1,10 +1,12 @@
-* list all available functions, including plugins, thinking !calls, should 
-  also be able to !calls <plugin> to get all the plugins calls
-* !help and !help <plugin>
+* !help <plugin>
 * !plugins should read a directory and list know plugins which can then be 
   loaded with a command
 * !unplug to unload a loaded plugin
 * refactor into smaller files
 * refactor some to harker-irc
 * remove plugins with broken pipe
-* only allow one of each plugin
+
+TO TEST
+=======
+* help dialog
+* unload plugin when new one is loaded
