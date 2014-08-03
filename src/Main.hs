@@ -195,15 +195,17 @@ tail' _      = []
 
 helpList :: [String]
 helpList = 
-    [ "!hauth:     authenticate with harkerbot"
-    , "!help:      this dialog"
-    , "!hunauth:   unauthenticate with harkerbot"
-    , "!pingalert: print a message in the default channel when a ping \
-        \is recieved"
-    , "!plugins:   list all current plugins"
-    , "!quit:      force harkerbot to shutdown"
-    , "!unplug:    remove a plugin"
-    , "!uptime:    show how long harkerbot has been running"
+    [ "!hauth <password>: authenticate with harkerbot"
+    , "!help:             this dialog"
+    , "!hunauth:          unauthenticate with harkerbot"
+    , "!id <statement>:   echo <statement>"
+    , "!pingalert:        print a message in the default"
+    , "                   channel when a ping is recieved"
+    , "!plugins:          list all current plugins"
+    , "!quit:             force harkerbot to shutdown"
+    , "!unplug:           remove a plugin"
+    , "!uptime:           show how long harkerbot has been"
+    , "                   running"
     ]
 
 evalpriv :: IRCInPrivMsg -> Bot ()
@@ -228,7 +230,7 @@ evalpriv msg
 
 pluginBroadcast :: IRCInPrivMsg -> Bot ()
 pluginBroadcast msg = do
-    let mstr = foldl (\a b -> a ++ b ++ "\n") "" $ toList msg
+    let mstr = foldl (\a b -> a ++ b ++ "\n") "" (toList msg) ++ "-"
     l <- gets plugins >>= liftIO . readMVar
     liftIO $ mapM_ (\(_,_,h) -> sendmsg mstr h) l
 

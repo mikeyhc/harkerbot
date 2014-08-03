@@ -13,7 +13,7 @@ main = do
     hPutStrLn h "version: 0.1.0.0"
     hPutStrLn h $ "server: " ++ sockaddr
     r <- hGetLine h
-    if r == "registed" 
+    if r == "registered" 
         then loopfunc (acceptfunc s)
         else hPutStrLn stderr $ "error: " ++ r
 
