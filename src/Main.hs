@@ -1,5 +1,3 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-
 import Control.Applicative
 import Control.Arrow
 import Control.Concurrent (forkFinally, MVar, newEmptyMVar, putMVar, takeMVar
@@ -14,6 +12,8 @@ import Data.List
 import Data.Maybe
 import Data.Typeable
 import HarkerIRC.Types
+import HarkerServer.Args
+import HarkerServer.Types
 import Network
 import System.Console.GetOpt
 import System.Directory
@@ -24,105 +24,6 @@ import System.Timeout
 import System.IO
 import Text.Printf
 
-data CmdFlag 
-    = SetNick String
-    | SetPass String
-    | SetServer String
-    | SetPort String
-    | SetChan String
-    | SetMaxLine String
-
-data BotCore  = BotCore { socket    :: Handle 
-                        , starttime :: ClockTime
-                        , plugintid :: ThreadId
-                        , nick      :: String
-                        , pass      :: String
-                        , chan      :: String
-                        , maxlines  :: Int
-                        }
-data BotBrain = BotBrain { botauth      :: Maybe User
-                         , honkslam     :: Bool
-                         , pingalert    :: Bool
-                         , plugins      :: MVar [Plugin]
-                         , childstatus  :: MVar Status
-                         }
-data PluginCore = PluginCore { pluginVar  :: MVar [Plugin]
-                             , statusVar  :: MVar Status
-                             , pluginSock :: Socket
-                             }
-data Status = Starting | Running | Dead
-data TimeOutException = TimeOutException
-    deriving (Show, Typeable)
-instance Exception TimeOutException
-
-isRunning Running  = True
-isRunning Starting = True
-isRunning _        = False
-
---                     name,   version, socket, tid
-type Plugin         = (String, String, Handle)
-type Bot a          = ReaderT BotCore (StateT BotBrain IO) a
-type PluginThread a = ReaderT PluginCore IO a
-type OptSet         = (String, String, String, Int, String, Int)
-
-runbot :: BotBrain -> BotCore -> IO ()
-runbot bb bc = runStateT (runReaderT run bc) bb >> return ()
-
-runPluginThread :: PluginCore -> IO ()
-runPluginThread pc = runReaderT pluginThread pc >> return ()
-
-emptyBrain :: IO BotBrain
-emptyBrain = do
-    v <- newEmptyMVar
-    putMVar v []
-    d <- newEmptyMVar
-    return $ BotBrain Nothing False False v d
-
-defpass      = "harker"
-defserver    = "segfault.net.nz"
-defport      = 6667
-defchan      = "#bots"
-defnick      = "harker"
-defmaxlines  = 7
-
-options = [Option ['n'] []  (ReqArg SetNick "NICK")
-            "Set the default nick for the bot"
-          ,Option ['p'] []  (ReqArg SetPass "PASS")
-            "Set the authentication password"
-          ,Option ['H'] []  (ReqArg SetServer "HOST")  
-            "Sets the host to connect to"
-          ,Option ['P'] []  (ReqArg SetPort "PORT")
-            "Sets the port to connect on"
-          ,Option ['c'] []  (ReqArg SetChan "CHANNEL")
-            "Sets the channel to connect to"
-          ,Option ['m'] []  (ReqArg SetMaxLine "MAXLINES") 
-            "Set the maximum lines printed in a public channel"
-          ]
-
-emptyOptSet :: OptSet
-emptyOptSet = (defnick, defpass, defserver, defport, defchan, defmaxlines)
-
-parseopts :: [String] -> Either String OptSet
-parseopts argv = case getOpt Permute options argv of 
-    (args, _, []  ) -> Right $ foldr parsearg emptyOptSet args
-    (_,    _, errs) -> Left $ concat errs ++ usageInfo header options
-    where header = "Usage: harker-server [OPTIONS..]"
-
-_first  g (a, b, c, d, e, f) = (g a, b, c, d, e, f)
-_second g (a, b, c, d, e, f) = (a, g b, c, d, e, f)
-_third  g (a, b, c, d, e, f) = (a, b, g c, d, e, f)
-_fourth g (a, b, c, d, e, f) = (a, b, c, g d, e, f)
-_fifth  g (a, b, c, d, e, f) = (a, b, c, d, g e, f)
-_sixth  g (a, b, c, d, e, f) = (a, b, c, d, e, g f)
-
-parsearg :: CmdFlag -> OptSet -> OptSet
-parsearg (SetNick x)    = _first  (const x)
-parsearg (SetPass x)    = _second (const x)
-parsearg (SetServer x)  = _third  (const x)
-parsearg (SetPort x)    = _fourth (const $ read x)
-parsearg (SetChan x)    = _fifth  (const x)
-parsearg (SetMaxLine x) = _sixth  (const $ read x)
-                             
 main :: IO ()
 main = do
     opts <- fmap parseopts getArgs
@@ -135,7 +36,7 @@ main = do
                 startPluginThread (plugins brain) (childstatus brain)
                 >>= connect o (plugins brain) (childstatus brain))
             (hClose . socket) 
-            (runbot brain)
+            ((flip $ runbot brain) run)
 
 startPluginThread :: MVar [Plugin] -> MVar Status -> IO ThreadId
 startPluginThread pl cs = do
@@ -165,7 +66,7 @@ pluginListener :: MVar [Plugin] -> MVar Status -> IO ()
 pluginListener pl status = do
     printf "Starting Plugin Thread\n"
     bracket (connectUnixPlugin pl status) (sClose . pluginSock) 
-            runPluginThread
+            (flip runPluginThread pluginThread)
 
 closeplugins :: MVar [Plugin] -> IO ()
 closeplugins pl = takeMVar pl >>= mapM_ (\(_,_,h) -> hClose h) 
