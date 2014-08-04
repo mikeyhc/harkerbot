@@ -123,20 +123,20 @@ helpList =
 
 evalpriv :: IRCInPrivMsg -> Bot ()
 evalpriv msg
-    | m == "!quit"             = runauth n u c (quitfunc "Exiting")
-    | m == "!uptime"           = uptime >>= privmsg n c
-    | m == "!honkslam"         = runauth n u c (togglehonkslam n u c)
-    | m == "!pingalert"        = runauth n u c (togglepingalert n u c)
-    | m == "!hauth"            = privmsg n c "needs a password idiot"
-    | m == "!plugins"          = pluginList >>= mapM_ (privmsg n c)
-    | m == "!help"             = mapM_ (privmsg n c) helpList
-    | "!unplug" `isPrefixOf` m = runauth n u c (unplug (drop 7 m) 
+    | m == "!quit"              = runauth n u c (quitfunc "Exiting")
+    | m == "!uptime"            = uptime >>= privmsg n c
+    | m == "!honkslam"          = runauth n u c (togglehonkslam n u c)
+    | m == "!pingalert"         = runauth n u c (togglepingalert n u c)
+    | m == "!hauth"             = privmsg n c "needs a password idiot"
+    | m == "!plugins"           = pluginList >>= mapM_ (privmsg n c)
+    | m == "!help"              = mapM_ (privmsg n c) helpList
+    | "!unplug " `isPrefixOf` m = runauth n u c (unplug (drop 8 m) 
                                                 >>= privmsg n c)
-    | "!hauth " `isPrefixOf` m = auth u (drop 7 m) >>= privmsg n c
-    | m == "!hunauth"          = runauth n u c (unauth n u c)
-    | "!id " `isPrefixOf` m    = privmsg n c (drop 4 m)
-    | map toLower m == "honk"  = hslam n c m
-    | otherwise                = pluginBroadcast msg
+    | "!hauth " `isPrefixOf` m  = auth u (drop 7 m) >>= privmsg n c
+    | m == "!hunauth"           = runauth n u c (unauth n u c)
+    | "!id " `isPrefixOf` m     = privmsg n c (drop 4 m)
+    | map toLower m == "honk"   = hslam n c m
+    | otherwise                 = pluginBroadcast msg
     where
         n = ircNick msg
         m = ircMsg  msg

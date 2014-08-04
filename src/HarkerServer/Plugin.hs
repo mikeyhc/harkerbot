@@ -10,6 +10,7 @@ import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Trans
 import Data.Maybe
+import Debug.Trace
 import HarkerServer.Types
 import Network
 import System.Directory
@@ -114,18 +115,21 @@ pluginThread = do
 
 unplug :: String -> Bot String
 unplug n = do
-        t     <- gets plugins
-        plist <- liftIO $ readMVar t
-        fst <$> liftIO (unplug' n plist)
+        t      <- gets plugins
+        plist  <- liftIO $ takeMVar t
+        (r, l) <- liftIO (unplug' n plist)
+	liftIO $ putMVar t l
+	return r
         where
             unplug' :: String -> [Plugin] -> IO (String, [Plugin])
             unplug' n []                = return (failmsg n, [])
             unplug' n (x@(n', _, h):xs)
-                | n == n'   = do
+                | trace ("n: " ++ n) $
+		  n == n'   = do
                     hPutStrLn h "action: quit"
                     hClose h
                     return (passmsg n, xs)
                 | otherwise = second (x:) <$> unplug' n xs
 
-            failmsg = (++) "Plugin " . ((++) " not found!")
-            passmsg = (++) "Plugin " . ((++) " unplugged")
+            failmsg = ("Plugin " ++) . (++ " not found!")
+            passmsg = ("Plugin " ++) . (++ " unplugged")
