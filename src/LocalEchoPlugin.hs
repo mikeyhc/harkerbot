@@ -1,8 +1,18 @@
+{-# LANGUAGE DeriveDataTypeable #-}
+
+import Control.Applicative
 import Control.Concurrent
+import Control.Exception
 import Control.Monad
+import Data.Typeable
 import Network
 import System.Directory
+import System.Exit
 import System.IO
+
+data QuitException = QuitException String
+    deriving (Typeable, Show)
+instance Exception QuitException
 
 sockaddr = "/tmp/.local-echo.sock"
 
@@ -14,12 +24,35 @@ main = do
     hPutStrLn h $ "server: " ++ sockaddr
     r <- hGetLine h
     if r == "registered" 
-        then loopfunc (acceptfunc s)
+        then do
+            tid <- myThreadId
+            loopfunc (acceptfunc s tid) `catch` quitcatch
         else hPutStrLn stderr $ "error: " ++ r
+    b <- doesFileExist sockaddr 
+    when b $ removeFile sockaddr
+
+
+quitcatch :: QuitException -> IO ()
+quitcatch _ = do 
+    putStrLn "quiting"
+    return ()
+
+trim [x] 
+    | x == '\n' = []
+    | otherwise = [x]
+trim (x:xs) = x:trim xs
 
 loopfunc a = a >> loopfunc a
 
-acceptfunc :: Socket -> IO ()
-acceptfunc s = accept s >>= \(h, _, _) ->
-    void $ forkFinally (loopfunc (hGetLine h >>= putStrLn)) 
-                       (\_ -> hClose h >> removeFile sockaddr)
+acceptfunc :: Socket -> ThreadId -> IO ()
+acceptfunc s tid = accept s >>= \(h, _, _) ->
+    void $ forkFinally (forkfunc h tid) (exitfunc h)
+
+exitfunc h _ = hClose h
+
+forkfunc :: Handle -> ThreadId -> IO ()
+forkfunc h tid = do
+    l <- trim <$> hGetLine h
+    if l == "action: quit" then exitfunc h (Right ()) 
+                                >> throwTo tid (QuitException "done")
+                           else putStrLn l >> forkfunc h tid

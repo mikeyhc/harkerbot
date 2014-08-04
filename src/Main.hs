@@ -14,6 +14,7 @@ import Data.Typeable
 import HarkerIRC.Types
 import HarkerServer.Args
 import HarkerServer.Types
+import HarkerServer.Plugin
 import Network
 import System.Console.GetOpt
 import System.Directory
@@ -38,18 +39,6 @@ main = do
             (hClose . socket) 
             ((flip $ runbot brain) run)
 
-startPluginThread :: MVar [Plugin] -> MVar Status -> IO ThreadId
-startPluginThread pl cs = do
-        putMVar cs Starting
-        tid <- forkFinally (pluginListener pl cs) 
-            (\e -> do { case e of { 
-                        Left err -> putStrLn $ "Exception: " ++ show e;
-                        _        -> return () };
-                    closeplugins pl >> takeMVar cs >> putMVar cs Dead })
-        v <- readMVar cs
-        if isRunning v then return tid
-        else hPutStr stderr ("Couldn't open " ++ unixaddr) >> exitFailure
-
 connect :: OptSet -> MVar [Plugin] -> MVar Status -> ThreadId -> IO BotCore
 connect (n, pa, s, po, c, m) pl cs tid = notify s po $ do
         t <- getClockTime
@@ -61,82 +50,6 @@ connect (n, pa, s, po, c, m) pl cs tid = notify s po $ do
         notify a b = bracket_
             (printf "Connecting to %s:%d...\n" a b >> hFlush stdout)
             (printf "Connected to %s.\n" a)
-
-pluginListener :: MVar [Plugin] -> MVar Status -> IO ()
-pluginListener pl status = do
-    printf "Starting Plugin Thread\n"
-    bracket (connectUnixPlugin pl status) (sClose . pluginSock) 
-            (flip runPluginThread pluginThread)
-
-closeplugins :: MVar [Plugin] -> IO ()
-closeplugins pl = takeMVar pl >>= mapM_ (\(_,_,h) -> hClose h) 
-                  >> putMVar pl []
-
-unixaddr = "/tmp/.harker-server.sock"
-unixSocket = UnixSocket unixaddr
-
-connectUnixPlugin :: MVar [Plugin] -> MVar Status -> IO PluginCore
-connectUnixPlugin p s = do
-    fe <- doesFileExist unixaddr
-    if fe then removeFile unixaddr else return ()
-    r <- PluginCore p s <$> listenOn unixSocket
-    putStrLn $ unixaddr ++ " opened"
-    _ <- takeMVar  s
-    putMVar s Running
-    return r
-
-pluginThread :: PluginThread ()
-pluginThread = do 
-    sock <- asks pluginSock
-    pl <- asks pluginVar
-    (h, hn, _) <- liftIO $ accept sock
-    liftIO $ forkFinally (pluginFromHandle h pl) 
-        (\e -> do 
-            case e of
-                Left err -> putStrLn $ "Exception: " ++ show err 
-                _        -> return ()
-            hClose h)
-    pluginThread 
-
-pluginFromHandle :: Handle -> MVar [Plugin] -> IO ()
-pluginFromHandle h pl = do
-    n <- hGetLine h
-    v <- hGetLine h
-    s <- hGetLine h
-    case parsePluginRegister n v s of 
-        Left msg -> hPutStrLn h msg
-        Right (n', v', s') -> do
-            mh' <- fmap Just (connectTo "localhost" (UnixSocket s')) 
-                `catch` handleException
-            case mh' of
-                Just h' -> do
-                    hPutStrLn h "registered" 
-                    modifyMVar_ pl 
-                        (\l -> return $ (n', v', h'):filter (ffilt n') l)
-                Nothing -> do
-                    hPutStrLn h $ "could not connect to " ++ s'
-                    return ()
-    where
-        handleException :: SomeException -> IO (Maybe Handle)
-        handleException e = do
-            putStrLn $ "connection exception: " ++ show e
-            return Nothing
-
-        ffilt a (b, _, _) = a /= b
-
-parsePluginRegister :: String -> String -> String 
-                    -> Either String (String, String, String)
-parsePluginRegister n v s =
-    let (hn, nv) = splitAt 6 n
-        (vn, vv) = splitAt 9 v
-        (sn, sv) = splitAt 8 s
-    in   if hn == "name: "    && nv /= []
-    then if vn == "version: " && vv /= []
-    then if sn == "server: "  && sv /= []
-    then Right (nv, vv, sv)
-    else Left "no server component"
-    else Left "no version component"
-    else Left "no name component"
 
 run :: Bot ()
 run = ircInit >> asks socket >>= listen
@@ -217,6 +130,8 @@ evalpriv msg
     | m == "!hauth"            = privmsg n c "needs a password idiot"
     | m == "!plugins"          = pluginList >>= mapM_ (privmsg n c)
     | m == "!help"             = mapM_ (privmsg n c) helpList
+    | "!unplug" `isPrefixOf` m = runauth n u c (unplug (drop 7 m) 
+                                                >>= privmsg n c)
     | "!hauth " `isPrefixOf` m = auth u (drop 7 m) >>= privmsg n c
     | m == "!hunauth"          = runauth n u c (unauth n u c)
     | "!id " `isPrefixOf` m    = privmsg n c (drop 4 m)
@@ -282,13 +197,6 @@ uptime = do
     now  <- liftIO getClockTime
     zero <- asks starttime
     return . prettyClockDiff $ diffClockTimes now zero
-
-pluginList :: Bot [String]
-pluginList = do
-    l <- gets plugins >>= liftIO . readMVar
-    return $ header:map (\(n,v,_) -> "    " ++ n ++ ": v" ++ v) l
-    where
-        header = "registered plugins:"
 
 prettyClockDiff :: TimeDiff -> String
 prettyClockDiff td =

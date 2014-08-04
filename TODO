@@ -2,7 +2,6 @@
 * !plugins should read a directory and list know plugins which can then be 
   loaded with a command
 * !unplug to unload a loaded plugin
-* refactor into smaller files
 * refactor some to harker-irc
 * remove plugins with broken pipe
 
