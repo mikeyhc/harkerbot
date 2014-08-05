@@ -28,22 +28,30 @@ data BotBrain = BotBrain { botauth      :: Maybe User
                          , plugins      :: MVar [Plugin]
                          , childstatus  :: MVar Status
                          }
-data PluginCore = PluginCore { pluginVar  :: MVar [Plugin]
-                             , statusVar  :: MVar Status
-                             , pluginSock :: Socket
+data PluginCore = PluginCore { pluginVar      :: MVar [Plugin]
+                             , statusVar      :: MVar Status
+                             , pluginMsgQueue :: MessageQueue
+                             , pluginSock     :: Socket
                              }
 
 data Status = Starting | Running | Dead
 data TimeOutException = TimeOutException
     deriving (Show, Typeable)
 instance Exception TimeOutException
+data ShutdownException = ShutdownException
+    deriving (Show, Typeable)
+instance Exception ShutdownException
+
+isShutdownException :: (Exception e) => e -> Bool
+isShutdownException ShutdownException = True
+isShutdownException _                 = False
 
 isRunning Running  = True
 isRunning Starting = True
 isRunning _        = False
 
 --                     name,   version, socket, tid
-type Plugin         = (String, String, Handle)
+type Plugin         = (String, String, Handle, ThreadId)
 type Bot a          = ReaderT BotCore (StateT BotBrain IO) a
 type PluginThread a = ReaderT PluginCore IO a
 

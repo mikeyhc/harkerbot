@@ -147,7 +147,7 @@ pluginBroadcast :: IRCInPrivMsg -> Bot ()
 pluginBroadcast msg = do
     let mstr = foldl (\a b -> a ++ b ++ "\n") "" (toList msg) ++ "-"
     l <- gets plugins >>= liftIO . readMVar
-    liftIO $ mapM_ (\(_,_,h) -> sendmsg mstr h) l
+    liftIO $ mapM_ (\(_,_,h,_) -> sendmsg mstr h) l
 
 sendmsg :: String -> Handle -> IO ThreadId
 sendmsg str h = forkIO $ hPutStrLn h str 

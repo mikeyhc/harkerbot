@@ -19,13 +19,14 @@ import System.IO
 import Text.Printf
 
 closeplugins :: MVar [Plugin] -> IO ()
-closeplugins pl = takeMVar pl >>= mapM_ (\(_,_,h) -> hClose h) 
+closeplugins pl = takeMVar pl >>= mapM_ (\(_,_,h,_) -> hClose h) 
                   >> putMVar pl []
 
-startPluginThread :: MVar [Plugin] -> MVar Status -> IO ThreadId
-startPluginThread pl cs = do
+startPluginThread :: MVar [Plugin] -> MVar MessageQueue -> MVar Status 
+                  -> IO ThreadId
+startPluginThread pl mq cs = do
         putMVar cs Starting
-        tid <- forkFinally (pluginListener pl cs) 
+        tid <- forkFinally (pluginListener pl mq cs) 
             (\e -> do { case e of { 
                         Left err -> putStrLn $ "Exception: " ++ show e;
                         _        -> return () };
@@ -34,8 +35,8 @@ startPluginThread pl cs = do
         if isRunning v then return tid
         else hPutStr stderr ("Couldn't open " ++ unixaddr) >> exitFailure
 
-pluginListener :: MVar [Plugin] -> MVar Status -> IO ()
-pluginListener pl status = do
+pluginListener :: MVar [Plugin] -> MVar MessageQueue -> MVar Status -> IO ()
+pluginListener pl mq status = do
     printf "Starting Plugin Thread\n"
     bracket (connectUnixPlugin pl status) (sClose . pluginSock) 
             (flip runPluginThread pluginThread)
@@ -43,18 +44,19 @@ pluginListener pl status = do
 unixaddr = "/tmp/.harker-server.sock"
 unixSocket = UnixSocket unixaddr
 
-connectUnixPlugin :: MVar [Plugin] -> MVar Status -> IO PluginCore
-connectUnixPlugin p s = do
+connectUnixPlugin :: MVar [Plugin] -> MVar MessageQueue -> MVar Status 
+                  -> IO PluginCore
+connectUnixPlugin p mq s = do
     fe <- doesFileExist unixaddr
     if fe then removeFile unixaddr else return ()
-    r <- PluginCore p s <$> listenOn unixSocket
+    r <- PluginCore p s mq <$> listenOn unixSocket
     putStrLn $ unixaddr ++ " opened"
     _ <- takeMVar  s
     putMVar s Running
     return r
 
-pluginFromHandle :: Handle -> MVar [Plugin] -> IO ()
-pluginFromHandle h pl = do
+pluginFromHandle :: Handle -> MVar [Plugin] -> MVar MessageQueue -> IO ()
+pluginFromHandle h pl mq = do
     n <- hGetLine h
     v <- hGetLine h
     s <- hGetLine h
@@ -65,9 +67,12 @@ pluginFromHandle h pl = do
                 `catch` handleException
             case mh' of
                 Just h' -> do
-                    hPutStrLn h "registered" 
+                    tid <- forkFinally (listenerThread h' mq) 
+                                       (shutdownHandler n' pl mq)
+                    hPutStrLn h "registered"
                     modifyMVar_ pl 
-                        (\l -> return $ (n', v', h'):filter (ffilt n') l)
+                        (\l -> return $ (n', v', h', tid)
+                                      :filter (ffilt n') l)
                 Nothing -> do
                     hPutStrLn h $ "could not connect to " ++ s'
                     return ()
@@ -77,7 +82,29 @@ pluginFromHandle h pl = do
             putStrLn $ "connection exception: " ++ show e
             return Nothing
 
-        ffilt a (b, _, _) = a /= b
+        ffilt a (b, _, _, _) = a /= b
+
+listenerThread :: Handle -> MVar MessageQueue -> IO ()
+listenerThread h mq = do
+    return ()
+    listenerThread h mq
+
+shutdownHandler :: (Exception a) => String -> MVar [Plugin] 
+                -> MVar MessageQueue -> Either a () -> IO()
+shutdownHandler n pl mq e = 
+    case e of
+        Left err -> if isShutdownException err then do
+            l <- takeMVar pl
+            (e, l') <- removeElement (\(n', _, _, _) -> n == n') l 
+            putMVar pl l'
+            case e of
+                Just (_, _, h, _) -> hClose h
+                Nothing           -> modifyMVar_ mq 
+                    (++ [ "Could not find plugin" ])
+        Right _  -> putStrLn $ n ++ " exited unexpectedly"
+
+removeElement :: (a -> Bool) -> [a] -> Maybe a
+removeElement
 
 parsePluginRegister :: String -> String -> String 
                     -> Either String (String, String, String)
@@ -96,7 +123,7 @@ parsePluginRegister n v s =
 pluginList :: Bot [String]
 pluginList = do
     l <- gets plugins >>= liftIO . readMVar
-    return $ header:map (\(n,v,_) -> "    " ++ n ++ ": v" ++ v) l
+    return $ header:map (\(n,v,_,_) -> "    " ++ n ++ ": v" ++ v) l
     where
         header = "registered plugins:"
 
@@ -104,8 +131,9 @@ pluginThread :: PluginThread ()
 pluginThread = do 
     sock <- asks pluginSock
     pl <- asks pluginVar
+    mq <- asks pluginMsgQueue
     (h, hn, _) <- liftIO $ accept sock
-    liftIO $ forkFinally (pluginFromHandle h pl) 
+    liftIO $ forkFinally (pluginFromHandle h pl mq) 
         (\e -> do 
             case e of
                 Left err -> putStrLn $ "Exception: " ++ show err 
@@ -123,7 +151,7 @@ unplug n = do
         where
             unplug' :: String -> [Plugin] -> IO (String, [Plugin])
             unplug' n []                = return (failmsg n, [])
-            unplug' n (x@(n', _, h):xs)
+            unplug' n (x@(n', _, h, _):xs)
                 | trace ("n: " ++ n) $
 		  n == n'   = do
                     hPutStrLn h "action: quit"
