@@ -27,10 +27,11 @@ data BotBrain = BotBrain { botauth      :: Maybe User
                          , pingalert    :: Bool
                          , plugins      :: MVar [Plugin]
                          , childstatus  :: MVar Status
+                         , messagequeue :: MVar MessageQueue
                          }
 data PluginCore = PluginCore { pluginVar      :: MVar [Plugin]
                              , statusVar      :: MVar Status
-                             , pluginMsgQueue :: MessageQueue
+                             , pluginMsgQueue :: MVar MessageQueue
                              , pluginSock     :: Socket
                              }
 
@@ -39,12 +40,8 @@ data TimeOutException = TimeOutException
     deriving (Show, Typeable)
 instance Exception TimeOutException
 data ShutdownException = ShutdownException
-    deriving (Show, Typeable)
+    deriving (Show, Typeable, Eq)
 instance Exception ShutdownException
-
-isShutdownException :: (Exception e) => e -> Bool
-isShutdownException ShutdownException = True
-isShutdownException _                 = False
 
 isRunning Running  = True
 isRunning Starting = True
@@ -63,7 +60,7 @@ runPluginThread pc f = runReaderT f pc >> return ()
 
 emptyBrain :: IO BotBrain
 emptyBrain = do
-    v <- newEmptyMVar
-    putMVar v []
+    v <- newMVar []
     d <- newEmptyMVar
-    return $ BotBrain Nothing False False v d
+    c <- newMVar []
+    return $ BotBrain Nothing False False v d c

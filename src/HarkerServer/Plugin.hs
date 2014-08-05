@@ -11,6 +11,7 @@ import Control.Monad.State
 import Control.Monad.Trans
 import Data.Maybe
 import Debug.Trace
+import HarkerIRC.Types
 import HarkerServer.Types
 import Network
 import System.Directory
@@ -22,9 +23,9 @@ closeplugins :: MVar [Plugin] -> IO ()
 closeplugins pl = takeMVar pl >>= mapM_ (\(_,_,h,_) -> hClose h) 
                   >> putMVar pl []
 
-startPluginThread :: MVar [Plugin] -> MVar MessageQueue -> MVar Status 
+startPluginThread :: MVar [Plugin] -> MVar Status -> MVar MessageQueue 
                   -> IO ThreadId
-startPluginThread pl mq cs = do
+startPluginThread pl cs mq = do
         putMVar cs Starting
         tid <- forkFinally (pluginListener pl mq cs) 
             (\e -> do { case e of { 
@@ -38,15 +39,15 @@ startPluginThread pl mq cs = do
 pluginListener :: MVar [Plugin] -> MVar MessageQueue -> MVar Status -> IO ()
 pluginListener pl mq status = do
     printf "Starting Plugin Thread\n"
-    bracket (connectUnixPlugin pl status) (sClose . pluginSock) 
+    bracket (connectUnixPlugin pl status mq) (sClose . pluginSock) 
             (flip runPluginThread pluginThread)
 
 unixaddr = "/tmp/.harker-server.sock"
 unixSocket = UnixSocket unixaddr
 
-connectUnixPlugin :: MVar [Plugin] -> MVar MessageQueue -> MVar Status 
+connectUnixPlugin :: MVar [Plugin] -> MVar Status -> MVar MessageQueue 
                   -> IO PluginCore
-connectUnixPlugin p mq s = do
+connectUnixPlugin p s mq = do
     fe <- doesFileExist unixaddr
     if fe then removeFile unixaddr else return ()
     r <- PluginCore p s mq <$> listenOn unixSocket
@@ -91,20 +92,28 @@ listenerThread h mq = do
 
 shutdownHandler :: (Exception a) => String -> MVar [Plugin] 
                 -> MVar MessageQueue -> Either a () -> IO()
-shutdownHandler n pl mq e = 
+shutdownHandler n pl mq e = do
+    l <- takeMVar pl
+    let (el, l') = removeElement (\(n', _, _, _) -> n == n') l 
+    putMVar pl l'
+    case el of
+        Just (_, _, h, _) -> hPutStrLn h "action: quit" >> hClose h
+        _                 -> return ()
     case e of
-        Left err -> if isShutdownException err then do
-            l <- takeMVar pl
-            (e, l') <- removeElement (\(n', _, _, _) -> n == n') l 
-            putMVar pl l'
-            case e of
-                Just (_, _, h, _) -> hClose h
-                Nothing           -> modifyMVar_ mq 
-                    (++ [ "Could not find plugin" ])
+        Left err -> 
+            if checkException err ShutdownException then do
+                modifyMVar_ mq (case el of
+                    Just _ -> return . (++ [ n ++ " successfully unpluged" ])
+                    _      -> return . (++ [ "Could not find plugin" ]))
+            else putStrLn $ n ++ " exception: " ++ show err
         Right _  -> putStrLn $ n ++ " exited unexpectedly"
+    where
+        checkException e r = show e == show r
 
-removeElement :: (a -> Bool) -> [a] -> Maybe a
-removeElement
+removeElement :: (a -> Bool) -> [a] -> (Maybe a, [a])
+removeElement f []     = (Nothing, [])
+removeElement f (x:xs) = if f x then (Just x, xs)
+                                 else second (x:) $ removeElement f xs
 
 parsePluginRegister :: String -> String -> String 
                     -> Either String (String, String, String)

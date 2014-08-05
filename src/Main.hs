@@ -29,13 +29,16 @@ main :: IO ()
 main = do
     opts <- fmap parseopts getArgs
     brain <- emptyBrain
+    let
+        pl = plugins brain
+        cs = childstatus brain
+        mq = messagequeue brain
     case opts of 
         Left msg -> do  
             hPutStr stderr msg
             exitFailure
-        Right o  -> bracket ( 
-                startPluginThread (plugins brain) (childstatus brain)
-                >>= connect o (plugins brain) (childstatus brain))
+        Right o  -> bracket 
+            (startPluginThread pl cs mq >>= connect o pl cs)
             (hClose . socket) 
             ((flip $ runbot brain) run)
 
