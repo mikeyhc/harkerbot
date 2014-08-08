@@ -66,34 +66,51 @@ ircInit = do
     write "JOIN" c
 
 write :: String -> Message -> Bot ()
-write s t = do
+write s m = do
     h <- asks socket
-    liftIO $ hPrintf h "%s %s\r\n" s t
-    liftIO $ printf    "> %s %s\n" s t
+    liftIO $ hWrite h s m
+
+hWrite :: Handle -> String -> Message -> IO ()
+hWrite h s m = do
+    hPrintf h "%s %s\r\n" s m
+    printf    "> %s %s\n" s m
 
 listen :: Handle -> Bot ()
-listen h = loopfunc $ do
-    cs <- gets childstatus 
-    c  <- liftIO $ takeMVar cs
-    if not (isRunning c) 
-        then quitfunc "Plugin thread died"
-        else do
-            liftIO $ putMVar cs c
-            s <- liftIO $ fmap init (hGetLine h)
-            liftIO $ printf "< %s\n" s
-            if ping s then do 
-                    pong s
-                    c  <- asks chan
-                    pa <- gets pingalert
-                    if pa then write "PRIVMSG " (c ++ " :ping <---> pong")
-                          else return ()
-                else case parseRawIRC s of
-                    Left  a -> evalsys a
-                    Right b -> evalpriv b
+listen h = do
+    v <- gets messagequeue
+    liftIO . forkIO $ echoThread h v
+    loopfunc $ do
+        cs <- gets childstatus 
+        c  <- liftIO $ takeMVar cs
+        if not (isRunning c) 
+            then quitfunc "Plugin thread died"
+            else do
+                liftIO $ putMVar cs c
+                s <- liftIO $ fmap init (hGetLine h)
+                liftIO $ printf "< %s\n" s
+                if ping s then do 
+                        pong s
+                        c  <- asks chan
+                        pa <- gets pingalert
+                        if pa then write "PRIVMSG " 
+                                   (c ++ " :ping <---> pong")
+                              else return ()
+                    else case parseRawIRC s of
+                        Left  a -> evalsys a
+                        Right b -> evalpriv b
     where
         loopfunc a = a >> loopfunc a
         ping = ("PING :" `isPrefixOf`)
         pong = write "PONG" . (':' :) . drop 6 
+
+echoThread :: Handle -> MVar OutMessageQueue -> IO ()
+echoThread h m = loopfunc $ do
+    l <- liftIO $ takeMVar m
+    mapM_ (\x -> hPrivmsg h (_outircnick x)
+                            (_outircchan x)
+                            (_outircmsg  x)) l
+    liftIO $ putMVar m []
+    
 
 parseRawIRC :: RawIRCString -> Either IRCSystemMsg IRCInPrivMsg
 parseRawIRC s = let (n, a) = second tail' . break (== '!') $ tail' s
@@ -133,8 +150,9 @@ evalpriv msg
     | m == "!hauth"             = privmsg n c "needs a password idiot"
     | m == "!plugins"           = pluginList >>= mapM_ (privmsg n c)
     | m == "!help"              = mapM_ (privmsg n c) helpList
-    | "!unplug " `isPrefixOf` m = runauth n u c (unplug (drop 8 m) 
-                                                >>= privmsg n c)
+    | "!unplug " `isPrefixOf` m = runauth n u c (unplug c (drop 8 m)
+                                                >>= \x -> maybe (return ())
+                                                           (privmsg n c) x)
     | "!hauth " `isPrefixOf` m  = auth u (drop 7 m) >>= privmsg n c
     | m == "!hunauth"           = runauth n u c (unauth n u c)
     | "!id " `isPrefixOf` m     = privmsg n c (drop 4 m)
@@ -170,7 +188,17 @@ hslam n c m = do
             else return ()
 
 quitfunc :: Message -> Bot ()
-quitfunc s = write "QUIT" (":" ++ s) >> liftIO exitSuccess
+quitfunc s = do 
+    write "QUIT" (":" ++ s) 
+    m <- gets plugins
+    l <- liftIO $ readMVar m
+    liftIO $ mapM (\(_, _, _, t) -> throwTo t $ ShutdownException "") l
+    liftIO $ putMVar m []
+    liftIO $ putStrLn "waiting for plugins to disconnect"
+    liftIO . loopfunc $ do
+        r <-readMVar m
+        if null r then exitSuccess
+                  else yield
 
 togglehonkslam :: Nick -> User -> Chan -> Bot ()
 togglehonkslam n u c = do
@@ -191,6 +219,10 @@ togglepingalert n u c = do
 privmsg :: Nick -> Chan -> Message -> Bot ()
 privmsg n c s = if head c == '#' then write "PRIVMSG" (c ++ " :" ++ s)
                                  else write "PRIVMSG" (n ++ " :" ++ s)
+
+hPrivmsg :: Handle -> Nick -> Chan -> Message -> IO ()
+hPrivmsg h n c s = if head c == '#' then hWrite h "PRIVMSG" (c ++ " :" ++ s)
+                                    else hWrite h "PRIVMSG" (n ++ " :" ++ s)
 
 checkReg :: String -> Bool
 checkReg = (==) "You have not registered"

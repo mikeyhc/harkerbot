@@ -12,7 +12,7 @@ data CmdFlag
 
 type OptSet         = (String, String, String, Int, String, Int)
 
-defpass      = "harkerpass"
+defpass      = "morepass"
 defserver    = "segfault.net.nz"
 defport      = 6667
 defchan      = "#bots"

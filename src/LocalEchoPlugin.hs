@@ -4,6 +4,7 @@ import Control.Applicative
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
+import Data.List (isPrefixOf)
 import Data.Typeable
 import Network
 import System.Directory
@@ -53,6 +54,19 @@ exitfunc h _ = hClose h
 forkfunc :: Handle -> ThreadId -> IO ()
 forkfunc h tid = do
     l <- trim <$> hGetLine h
-    if l == "action: quit" then exitfunc h (Right ()) 
-                                >> throwTo tid (QuitException "done")
-                           else putStrLn l >> forkfunc h tid
+    if l == "action: quit" 
+        then exitfunc h (Right ()) >> throwTo tid (QuitException "done")
+        else do
+            putStrLn l
+            echo h l
+            forkfunc h tid
+
+echo :: Handle -> String -> IO ()
+echo h m 
+    | "nick: " `isPrefixOf` m = reply
+    | "chan: " `isPrefixOf` m = reply
+    | "msg: "  `isPrefixOf` m = reply
+    | m == "-"                = reply
+    | otherwise               = return ()
+    where
+        reply = hPutStrLn h m

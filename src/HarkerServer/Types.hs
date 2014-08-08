@@ -27,11 +27,11 @@ data BotBrain = BotBrain { botauth      :: Maybe User
                          , pingalert    :: Bool
                          , plugins      :: MVar [Plugin]
                          , childstatus  :: MVar Status
-                         , messagequeue :: MVar MessageQueue
+                         , messagequeue :: MVar OutMessageQueue
                          }
 data PluginCore = PluginCore { pluginVar      :: MVar [Plugin]
                              , statusVar      :: MVar Status
-                             , pluginMsgQueue :: MVar MessageQueue
+                             , pluginMsgQueue :: MVar OutMessageQueue
                              , pluginSock     :: Socket
                              }
 
@@ -39,9 +39,14 @@ data Status = Starting | Running | Dead
 data TimeOutException = TimeOutException
     deriving (Show, Typeable)
 instance Exception TimeOutException
-data ShutdownException = ShutdownException
-    deriving (Show, Typeable, Eq)
+data ShutdownException = ShutdownException 
+    { shutdownChannel :: String
+    } deriving (Show, Typeable)
+
 instance Exception ShutdownException
+
+instance Eq ShutdownException where
+    ShutdownException _ == ShutdownException _ = True
 
 isRunning Running  = True
 isRunning Starting = True
