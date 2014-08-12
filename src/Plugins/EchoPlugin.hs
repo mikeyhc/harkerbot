@@ -42,7 +42,6 @@ main = runPlugin "echo" "0.1.0.0" echo runEchoMonad
 
 echo :: EchoMonad ()
 echo = do
-    liftIO $ putStrLn "main echo"
     msg <- getMsg
     auth <- getAuth
     echo <- get
@@ -53,5 +52,5 @@ echo = do
                     sendReply $ "echo " ++ (if echo then "disabled" 
                                                     else "enabled")
                  else sendReply "you are not authenticated for that"
-    else if echo then sendReply msg
-                 else return ()
+    else if echo && head msg /= '!' then sendReply msg
+                                    else return ()

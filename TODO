@@ -1,10 +1,5 @@
 * !help <plugin>
-* !plugins should read a directory and list know plugins which can then be 
-  loaded with a command
-* refactor some to harker-irc
-* remove plugins with broken pipe
+* kill all threads on exit
 
 TO TEST
 =======
-* updated help dialog
-* test unplug
