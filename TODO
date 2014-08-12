@@ -1,5 +1,5 @@
+* plugins exit cleanly
 * !help <plugin>
-* kill all threads on exit
 
 TO TEST
 =======

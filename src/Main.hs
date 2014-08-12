@@ -193,14 +193,13 @@ quitfunc :: Message -> Bot ()
 quitfunc s = do 
     write "QUIT" (":" ++ s) 
     m <- gets plugins
-    l <- liftIO $ readMVar m
-    liftIO $ mapM (\(_, _, _, t) -> throwTo t $ ShutdownException "") l
-    liftIO $ putMVar m []
+    tid <- asks plugintid
+    liftIO . throwTo tid $ ShutdownException ""
     liftIO $ putStrLn "waiting for plugins to disconnect"
     liftIO . loopfunc $ do
-        r <-readMVar m
+        r <- readMVar m
         if null r then exitSuccess
-                  else yield
+                  else return ()
 
 togglepingalert :: Nick -> User -> Chan -> Bot ()
 togglepingalert n u c = do

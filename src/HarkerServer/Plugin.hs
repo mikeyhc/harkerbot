@@ -20,18 +20,16 @@ import System.IO
 import Text.Printf
 
 closeplugins :: MVar [Plugin] -> IO ()
-closeplugins pl = takeMVar pl >>= mapM_ (\(_,_,h,_) -> hClose h) 
-                  >> putMVar pl []
+closeplugins pl = readMVar pl 
+                  >>= mapM_ (\(_,_,h,t) -> throwTo t (ShutdownException ""))
 
 startPluginThread :: MVar [Plugin] -> MVar Status -> MVar OutMessageQueue 
                   -> IO ThreadId
 startPluginThread pl cs mq = do
         putMVar cs Starting
         tid <- forkFinally (pluginListener pl mq cs) 
-            (\e -> do { case e of { 
-                        Left err -> putStrLn $ "Exception: " ++ show e;
-                        _        -> return () };
-                    closeplugins pl >> takeMVar cs >> putMVar cs Dead })
+            (\_ -> do putStrLn "Stopping plugin thread" >> closeplugins pl 
+                      >> takeMVar cs >> putMVar cs Dead)
         v <- readMVar cs
         if isRunning v then return tid
         else hPutStr stderr ("Couldn't open " ++ unixaddr) >> exitFailure
@@ -113,16 +111,19 @@ shutdownHandler n pl mq e = do
     case e of
         Left err -> 
             if checkException err (ShutdownException "") then do
-                let msg = case el of {
-                    Just _ -> mkMessage err $ n ++ " successfully unpluged";
-                    _      -> mkMessage err "Could not find plugin" }
-                putStrLn $ show msg
+                msg <- case el of {
+                    Just _ -> do {
+                        putStrLn $ n ++ " successfully unpluged";
+                        mkMessage err $ n ++ " successfully unpluged" };
+                    _      -> do {
+                        putStrLn $ "could not find plugin " ++ n;
+                        mkMessage err "Could not find plugin" } }
                 modifyMVar_ mq (return . (++ [msg]))
             else putStrLn $ n ++ " exception: " ++ show err
         Right _  -> putStrLn $ n ++ " exited unexpectedly"
     where
         checkException e r = show e == show r
-        mkMessage x = IRCOutPrivMsg "#bots" "#bots" -- fix this
+        mkMessage x = return . IRCOutPrivMsg "#bots" "#bots" -- fix this
 
 removeElement :: (a -> Bool) -> [a] -> (Maybe a, [a])
 removeElement f []     = (Nothing, [])
