@@ -41,12 +41,12 @@ data TimeOutException = TimeOutException
 instance Exception TimeOutException
 data ShutdownException = ShutdownException 
     { shutdownChannel :: String
-    } deriving (Show, Typeable)
+    } deriving (Typeable)
 
 instance Exception ShutdownException
 
-instance Eq ShutdownException where
-    ShutdownException _ == ShutdownException _ = True
+instance Show ShutdownException where
+    show (ShutdownException _) = "ShutdownException"
 
 isRunning Running  = True
 isRunning Starting = True

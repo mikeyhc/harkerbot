@@ -106,18 +106,18 @@ shutdownHandler n pl mq e = do
     l <- takeMVar pl
     let (el, l') = removeElement (\(n', _, _, _) -> n == n') l 
     putMVar pl l'
-    case el of
+    case el of {
         Just (_, _, h, _) -> putStrLn ("sending quit to " ++ n) 
-                             >> hPutStrLn h "action: quit" >> hClose h
-        _                 -> return ()
+                             >> hPutStrLn h "action: quit" >> hClose h;
+        _                 -> return () }
     case e of
         Left err -> 
             if checkException err (ShutdownException "") then do
-                modifyMVar_ mq (case el of
-                    Just _ -> return . (++ [ mkMessage err $
-                                             n ++ " successfully unpluged" ])
-                    _      -> return . (++ [ mkMessage err 
-                                             "Could not find plugin" ]))
+                let msg = case el of {
+                    Just _ -> mkMessage err $ n ++ " successfully unpluged";
+                    _      -> mkMessage err "Could not find plugin" }
+                putStrLn $ show msg
+                modifyMVar_ mq (return . (++ [msg]))
             else putStrLn $ n ++ " exception: " ++ show err
         Right _  -> putStrLn $ n ++ " exited unexpectedly"
     where

@@ -95,9 +95,11 @@ listen h = do
                         if pa then write "PRIVMSG " 
                                    (c ++ " :ping <---> pong")
                               else return ()
-                    else case parseRawIRC s of
-                        Left  a -> evalsys a
-                        Right b -> evalpriv b
+                    else do
+                        emsg <- parseRawIRC s 
+                        case emsg of
+                            Left  a -> evalsys a
+                            Right b -> evalpriv b
     where
         loopfunc a = a >> loopfunc a
         ping = ("PING :" `isPrefixOf`)
@@ -112,15 +114,24 @@ echoThread h m = loopfunc $ do
     liftIO $ putMVar m []
     
 
-parseRawIRC :: RawIRCString -> Either IRCSystemMsg IRCInPrivMsg
+parseRawIRC :: RawIRCString -> Bot (Either IRCSystemMsg IRCInPrivMsg)
 parseRawIRC s = let (n, a) = second tail' . break (== '!') $ tail' s
                     a'     = case a of { '~':xs -> xs; _ -> a }
                     (u, b) = second tail' $ break (== ' ') a'
                     b'     = tail' $ dropWhile (/= ' ') b
                     (c, m) = second (tail' . tail') $ break (== ' ') b'
                     getmsg = tail' . dropWhile (/= ':') . tail'
-                in if m == [] then Left  . IRCSystemMsg $ getmsg s
-                              else Right $ IRCInPrivMsg n u False c m
+                in if m == [] then return . Left  . IRCSystemMsg $ getmsg s
+                              else do
+                                au <- checkAuth u
+                                return . Right $ IRCInPrivMsg n u au c m
+
+checkAuth :: User -> Bot Bool
+checkAuth user = do
+    mu <- gets botauth
+    case mu of
+        Just u -> return $ u == user
+        _      -> return False
 
 tail' :: [a] -> [a]
 tail' (_:xs) = xs
@@ -145,7 +156,6 @@ evalpriv :: IRCInPrivMsg -> Bot ()
 evalpriv msg
     | m == "!quit"              = runauth n u c (quitfunc "Exiting")
     | m == "!uptime"            = uptime >>= privmsg n c
-    | m == "!honkslam"          = runauth n u c (togglehonkslam n u c)
     | m == "!pingalert"         = runauth n u c (togglepingalert n u c)
     | m == "!hauth"             = privmsg n c "needs a password idiot"
     | m == "!plugins"           = pluginList >>= mapM_ (privmsg n c)
@@ -156,7 +166,6 @@ evalpriv msg
     | "!hauth " `isPrefixOf` m  = auth u (drop 7 m) >>= privmsg n c
     | m == "!hunauth"           = runauth n u c (unauth n u c)
     | "!id " `isPrefixOf` m     = privmsg n c (drop 4 m)
-    | map toLower m == "honk"   = hslam n c m
     | otherwise                 = pluginBroadcast msg
     where
         n = ircNick msg
@@ -180,13 +189,6 @@ evalsys msg
     where
         m = getIRCSysMsg msg
 
-hslam :: Nick -> Chan -> Message -> Bot ()
-hslam n c m = do
-    honk <- gets honkslam
-    ml <- asks maxlines
-    if honk then sequence_ . take ml $ repeat (privmsg n c m)
-            else return ()
-
 quitfunc :: Message -> Bot ()
 quitfunc s = do 
     write "QUIT" (":" ++ s) 
@@ -199,14 +201,6 @@ quitfunc s = do
         r <-readMVar m
         if null r then exitSuccess
                   else yield
-
-togglehonkslam :: Nick -> User -> Chan -> Bot ()
-togglehonkslam n u c = do
-    h <- not <$> gets honkslam
-    modify (togglehonk h)
-    privmsg n c $ "honkslam is now " ++ if h then "on" else "off"
-    where
-        togglehonk h x = x { honkslam = h }
 
 togglepingalert :: Nick -> User -> Chan -> Bot ()
 togglepingalert n u c = do
