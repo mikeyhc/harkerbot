@@ -1,4 +1,5 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, MultiParamTypeClasses,
+             FlexibleInstances #-}
 
 module Main where
 
@@ -19,20 +20,8 @@ instance (Monad m) => MonadState Bool (HonkMonadT m) where
 instance MonadTrans HonkMonadT where
     lift = HonkMonad . lift . lift
 
-instance (Functor m, Monad m) => HarkerClientMonad (HonkMonadT m) where
-    getSocket = HonkMonad . lift $ getSocket
-    getHandle = HonkMonad . lift $ getHandle
-    getIRCMsg = HonkMonad . lift $ getIRCMsg
-    getUser   = HonkMonad . lift $ getUser
-    getNick   = HonkMonad . lift $ getNick
-    getChan   = HonkMonad . lift $ getChan
-    getMMsg   = HonkMonad . lift $ getMMsg
-    getMsg    = HonkMonad . lift $ getMsg
-    getMAuth  = HonkMonad . lift $ getMAuth
-    getAuth   = HonkMonad . lift $ getAuth
-    setSocket = HonkMonad . lift . setSocket
-    setHandle = HonkMonad . lift . setHandle
-    setIRCMsg = HonkMonad . lift . setIRCMsg
+instance HarkerClientMonad (HonkMonadT IO) where
+    clientLift = HonkMonad . lift
 
 type HonkMonad a = HonkMonadT IO a
 
@@ -46,14 +35,13 @@ honk = do
     msg <- getMsg
     auth <- getAuth
     honk <- get
-    if msg == "!honkslam" then
-        if auth  then do 
-                    modify not
-                    sendReply $ "honkslam " ++ (if honk then "disabled" 
-                                                        else "enabled")
-                 else sendReply "you are not authenticated for that"
+    if msg == "!honkslam" then ifauth (toggle honk)
     else if honk && map toLower msg == "honk" then honkslam msg
                                               else return ()
 
 honkslam :: String -> HonkMonad ()
 honkslam = sequence_ . take 7 . repeat . sendReply 
+
+toggle :: Bool -> HonkMonad ()
+toggle h = modify not >> sendReply ("honkslam " ++ (if h then "disabled" 
+                                                         else "enabled"))

@@ -1,4 +1,5 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, MultiParamTypeClasses,
+             FlexibleInstances #-}
 
 module Main where
 
@@ -18,20 +19,8 @@ instance (Monad m) => MonadState Bool (EchoMonadT m) where
 instance MonadTrans EchoMonadT where
     lift = EchoMonad . lift . lift
 
-instance (Functor m, Monad m) => HarkerClientMonad (EchoMonadT m) where
-    getSocket = EchoMonad . lift $ getSocket
-    getHandle = EchoMonad . lift $ getHandle
-    getIRCMsg = EchoMonad . lift $ getIRCMsg
-    getUser   = EchoMonad . lift $ getUser
-    getNick   = EchoMonad . lift $ getNick
-    getChan   = EchoMonad . lift $ getChan
-    getMMsg   = EchoMonad . lift $ getMMsg
-    getMsg    = EchoMonad . lift $ getMsg
-    getMAuth  = EchoMonad . lift $ getMAuth
-    getAuth   = EchoMonad . lift $ getAuth
-    setSocket = EchoMonad . lift . setSocket
-    setHandle = EchoMonad . lift . setHandle
-    setIRCMsg = EchoMonad . lift . setIRCMsg
+instance HarkerClientMonad (EchoMonadT IO) where
+    clientLift = EchoMonad . lift 
 
 type EchoMonad a = EchoMonadT IO a
 
@@ -43,14 +32,12 @@ main = runPlugin "echo" "0.1.0.0" echo runEchoMonad
 echo :: EchoMonad ()
 echo = do
     msg <- getMsg
-    auth <- getAuth
     echo <- get
     liftIO $ putStrLn ("got msg: " ++ msg)
-    if msg == "!echo" then
-        if auth  then do 
-                    modify not
-                    sendReply $ "echo " ++ (if echo then "disabled" 
-                                                    else "enabled")
-                 else sendReply "you are not authenticated for that"
+    if msg == "!echo" then ifauth (toggle echo)
     else if echo && head msg /= '!' then sendReply msg
                                     else return ()
+
+toggle :: Bool -> EchoMonad ()
+toggle e = modify not >> sendReply ("echo " ++ (if e then "disabled" 
+                                                     else "enabled"))
