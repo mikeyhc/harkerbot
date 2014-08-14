@@ -124,7 +124,8 @@ parseRawIRC s = let (n, a) = second tail' . break (== '!') $ tail' s
                 in if m == [] then return . Left  . IRCSystemMsg $ getmsg s
                               else do
                                 au <- checkAuth u
-                                return . Right $ IRCInPrivMsg n u au c m
+                                nick <- asks nick
+                                return . Right $ IRCInPrivMsg n nick u au c m
 
 checkAuth :: User -> Bot Bool
 checkAuth user = do
