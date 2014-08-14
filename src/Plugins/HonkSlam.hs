@@ -36,6 +36,8 @@ honk = do
     auth <- getAuth
     honk <- get
     if msg == "!honkslam" then ifauth (toggle honk)
+    else if msg == "!help" 
+        then sendReply "!honkslam: enable/disable the honkslam"
     else if honk && map toLower msg == "honk" then honkslam msg
                                               else return ()
 

@@ -35,6 +35,7 @@ echo = do
     echo <- get
     liftIO $ putStrLn ("got msg: " ++ msg)
     if msg == "!echo" then ifauth (toggle echo)
+    else if msg == "!help" then sendReply "!echo: enable/disable echoing"
     else if echo && head msg /= '!' then sendReply msg
                                     else return ()
 

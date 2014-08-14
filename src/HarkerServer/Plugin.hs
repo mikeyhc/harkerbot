@@ -106,7 +106,9 @@ shutdownHandler n pl mq e = do
     putMVar pl l'
     case el of {
         Just (_, _, h, _) -> putStrLn ("sending quit to " ++ n) 
-                             >> hPutStrLn h "action: quit" >> hClose h;
+                             >> hPutStrLn h "action: quit" 
+                             >> hIsOpen h >>= \isOpen ->
+                             if isOpen then hClose h else return ();
         _                 -> return () }
     case e of
         Left err -> 

@@ -160,6 +160,7 @@ evalpriv msg
     | m == "!hauth"             = privmsg n c "needs a password idiot"
     | m == "!plugins"           = pluginList >>= mapM_ (privmsg n c)
     | m == "!help"              = mapM_ (privmsg n c) helpList
+    | "!help " `isPrefixOf` m   = pluginHelp msg (drop 6 m)
     | "!unplug " `isPrefixOf` m = runauth n u c (unplug c (drop 8 m)
                                                 >>= \x -> maybe (return ())
                                                            (privmsg n c) x)
@@ -178,6 +179,18 @@ pluginBroadcast msg = do
     let mstr = foldl (\a b -> a ++ b ++ "\n") "" (toList msg) ++ "-"
     l <- gets plugins >>= liftIO . readMVar
     liftIO $ mapM_ (\(_,_,h,_) -> sendmsg mstr h) l
+
+pluginHelp :: IRCInPrivMsg -> String -> Bot ()
+pluginHelp msg name = do
+    let n = ircNick msg
+        c = ircChan msg
+    l <- gets plugins >>= liftIO . readMVar
+    case find (\(n',_,_,_) -> n' == name) l of
+        Just (_, _, h, _) -> do
+            let mstr = foldl (\a b -> a ++ b ++ "\n") "" 
+                       (toList $ msg { _inircmsg = "!help" }) ++ "-"
+            void . liftIO $ sendmsg mstr h
+        _                 -> privmsg n c $ "No plugin " ++ name
 
 sendmsg :: String -> Handle -> IO ThreadId
 sendmsg str h = forkIO $ hPutStrLn h str 
