@@ -21,15 +21,16 @@ import Text.Printf
 
 closeplugins :: MVar [Plugin] -> IO ()
 closeplugins pl = readMVar pl 
-                  >>= mapM_ (\(_,_,h,t) -> throwTo t (ShutdownException ""))
+                  >>= mapM_ (\p -> throwTo (pluginThreadId p) 
+                                           (ShutdownException ""))
 
 startPluginThread :: MVar [Plugin] -> MVar Status -> MVar OutMessageQueue 
                   -> IO ThreadId
 startPluginThread pl cs mq = do
         putMVar cs Starting
         tid <- forkFinally (pluginListener pl mq cs) 
-            (\_ -> do putStrLn "Stopping plugin thread" >> closeplugins pl 
-                      >> takeMVar cs >> putMVar cs Dead)
+            (\_ -> putStrLn "Stopping plugin thread" >> closeplugins pl 
+                   >> takeMVar cs >> putMVar cs Dead)
         v <- readMVar cs
         if isRunning v then return tid
         else hPutStr stderr ("Couldn't open " ++ unixaddr) >> exitFailure
@@ -39,7 +40,7 @@ pluginListener :: MVar [Plugin] -> MVar OutMessageQueue -> MVar Status
 pluginListener pl mq status = do
     printf "Starting Plugin Thread\n"
     bracket (connectUnixPlugin pl status mq) (sClose . pluginSock) 
-            (flip runPluginThread pluginThread)
+            (`runPluginThread` pluginThread)
 
 unixaddr = "/tmp/.harker-server.sock"
 unixSocket = UnixSocket unixaddr
@@ -48,7 +49,7 @@ connectUnixPlugin :: MVar [Plugin] -> MVar Status -> MVar OutMessageQueue
                   -> IO PluginCore
 connectUnixPlugin p s mq = do
     fe <- doesFileExist unixaddr
-    if fe then removeFile unixaddr else return ()
+    when fe $ removeFile unixaddr 
     r <- PluginCore p s mq <$> listenOn unixSocket
     putStrLn $ unixaddr ++ " opened"
     _ <- takeMVar  s
@@ -71,7 +72,7 @@ pluginFromHandle h pl mq = do
                                        (shutdownHandler n' pl mq)
                     hPutStrLn h "registered"
                     modifyMVar_ pl 
-                        (\l -> return $ (n', v', h', tid)
+                        (\l -> return $ Plugin n' v' h' tid
                                       :filter (ffilt n') l)
                 Nothing -> do
                     hPutStrLn h $ "could not connect to " ++ s'
@@ -82,7 +83,7 @@ pluginFromHandle h pl mq = do
             putStrLn $ "connection exception: " ++ show e
             return Nothing
 
-        ffilt a (b, _, _, _) = a /= b
+        ffilt a p = a /= pluginName p
 
 listenerThread :: Handle -> MVar OutMessageQueue -> IO ()
 listenerThread h mq = loopfunc $ do
@@ -102,13 +103,13 @@ shutdownHandler :: (Exception a) => String -> MVar [Plugin]
                 -> MVar OutMessageQueue -> Either a () -> IO()
 shutdownHandler n pl mq e = do
     l <- takeMVar pl
-    let (el, l') = removeElement (\(n', _, _, _) -> n == n') l 
+    let (el, l') = removeElement (\x -> n == pluginName x) l 
     putMVar pl l'
     case el of {
-        Just (_, _, h, _) -> putStrLn ("sending quit to " ++ n) 
-                             >> hPutStrLn h "action: quit" 
-                             >> hIsOpen h >>= \isOpen ->
-                             if isOpen then hClose h else return ();
+        Just p -> let h = pluginHandle p
+                  in  putStrLn ("sending quit to " ++ pluginName p) 
+                      >> hPutStrLn h "action: quit" 
+                      >> hIsOpen h >>= \isOpen -> when isOpen $ hClose h;
         _                 -> return () }
     case e of
         Left err -> 
@@ -149,7 +150,8 @@ parsePluginRegister n v s =
 pluginList :: Bot [String]
 pluginList = do
     l <- gets plugins >>= liftIO . readMVar
-    return $ header:map (\(n,v,_,_) -> "    " ++ n ++ ": v" ++ v) l
+    return $ header:map (\x -> "    " ++ pluginName x ++ ": v" 
+                                      ++  pluginVersion x) l
     where
         header = "registered plugins:"
 
@@ -171,14 +173,14 @@ unplug :: Chan -> String -> Bot (Maybe String)
 unplug c n = do
         t      <- gets plugins
         plist  <- liftIO $ readMVar t
-        r <- liftIO (unplug' n plist)
-        return r
+        liftIO (unplug' n plist)
         where
             unplug' :: String -> [Plugin] -> IO (Maybe String)
             unplug' n []                = return . Just $ failmsg n
-            unplug' n (x@(n', _, _, tid):xs)
-                | n == n'   =
-                    throwTo tid (ShutdownException c) >> return Nothing
+            unplug' n (x:xs)
+                | n == pluginName x     =
+                    throwTo (pluginThreadId x) (ShutdownException c) 
+                    >> return Nothing
                 | otherwise = unplug' n xs
 
             failmsg = ("Plugin " ++) . (++ " not found!")

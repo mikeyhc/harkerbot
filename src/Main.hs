@@ -92,9 +92,7 @@ listen h = do
                         pong s
                         c  <- asks chan
                         pa <- gets pingalert
-                        if pa then write "PRIVMSG " 
-                                   (c ++ " :ping <---> pong")
-                              else return ()
+                        when pa $ write "PRIVMSG " (c ++ " :ping <---> pong")
                     else do
                         emsg <- parseRawIRC s 
                         case emsg of
@@ -121,8 +119,8 @@ parseRawIRC s = let (n, a) = second tail' . break (== '!') $ tail' s
                     b'     = tail' $ dropWhile (/= ' ') b
                     (c, m) = second (tail' . tail') $ break (== ' ') b'
                     getmsg = tail' . dropWhile (/= ':') . tail'
-                in if m == [] then return . Left  . IRCSystemMsg $ getmsg s
-                              else do
+                in if null m then return . Left  . IRCSystemMsg $ getmsg s
+                             else do
                                 au <- checkAuth u
                                 nick <- asks nick
                                 return . Right $ IRCInPrivMsg n nick u au c m
@@ -179,18 +177,18 @@ pluginBroadcast :: IRCInPrivMsg -> Bot ()
 pluginBroadcast msg = do
     let mstr = foldl (\a b -> a ++ b ++ "\n") "" (toList msg) ++ "-"
     l <- gets plugins >>= liftIO . readMVar
-    liftIO $ mapM_ (\(_,_,h,_) -> sendmsg mstr h) l
+    liftIO $ mapM_ (sendmsg mstr . pluginHandle) l
 
 pluginHelp :: IRCInPrivMsg -> String -> Bot ()
 pluginHelp msg name = do
     let n = ircNick msg
         c = ircChan msg
     l <- gets plugins >>= liftIO . readMVar
-    case find (\(n',_,_,_) -> n' == name) l of
-        Just (_, _, h, _) -> do
+    case find (\p -> pluginName p == name) l of
+        Just p -> do
             let mstr = foldl (\a b -> a ++ b ++ "\n") "" 
                        (toList $ msg { _inircmsg = "!help" }) ++ "-"
-            void . liftIO $ sendmsg mstr h
+            void . liftIO $ sendmsg mstr (pluginHandle p)
         _                 -> privmsg n c $ "No plugin " ++ name
 
 sendmsg :: String -> Handle -> IO ThreadId
@@ -212,8 +210,7 @@ quitfunc s = do
     liftIO $ putStrLn "waiting for plugins to disconnect"
     liftIO . loopfunc $ do
         r <- readMVar m
-        if null r then exitSuccess
-                  else return ()
+        when (null r) exitSuccess
 
 togglepingalert :: Nick -> User -> Chan -> Bot ()
 togglepingalert n u c = do
@@ -224,12 +221,12 @@ togglepingalert n u c = do
         toggleping p x = x { pingalert = p }
 
 privmsg :: Nick -> Chan -> Message -> Bot ()
-privmsg n c s = if head c == '#' then write "PRIVMSG" (c ++ " :" ++ s)
-                                 else write "PRIVMSG" (n ++ " :" ++ s)
+privmsg n c s = write "PRIVMSG" $ if head c == '#' then c ++ " :" ++ s
+                                                   else n ++ " :" ++ s
 
 hPrivmsg :: Handle -> Nick -> Chan -> Message -> IO ()
-hPrivmsg h n c s = if head c == '#' then hWrite h "PRIVMSG" (c ++ " :" ++ s)
-                                    else hWrite h "PRIVMSG" (n ++ " :" ++ s)
+hPrivmsg h n c s = hWrite h "PRIVMSG" $ if head c == '#' then c ++ " :" ++ s
+                                                         else n ++ " :" ++ s
 
 checkReg :: String -> Bool
 checkReg = (==) "You have not registered"

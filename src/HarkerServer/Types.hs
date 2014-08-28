@@ -53,15 +53,21 @@ isRunning Starting = True
 isRunning _        = False
 
 --                     name,   version, socket, tid
-type Plugin         = (String, String, Handle, ThreadId)
+data Plugin = Plugin
+            { pluginName      :: String
+            , pluginVersion   :: String
+            , pluginHandle    :: Handle
+            , pluginThreadId  :: ThreadId
+            }
+
 type Bot a          = ReaderT BotCore (StateT BotBrain IO) a
 type PluginThread a = ReaderT PluginCore IO a
 
 runbot :: BotBrain -> BotCore -> Bot a -> IO ()
-runbot bb bc f = runStateT (runReaderT f bc) bb >> return ()
+runbot bb bc f = void $ runStateT (runReaderT f bc) bb 
 
 runPluginThread :: PluginCore -> PluginThread a -> IO ()
-runPluginThread pc f = runReaderT f pc >> return ()
+runPluginThread pc f = void $ runReaderT f pc 
 
 emptyBrain :: IO BotBrain
 emptyBrain = do
