@@ -97,7 +97,7 @@ getMore h = do
     if s == "-" then return []
                 else (s:) <$> getMore h
 
-loopfunc a = a >> loopfunc a
+loopfunc a = a >> threadDelay 500 >> loopfunc a
 
 shutdownHandler :: (Exception a) => String -> MVar [Plugin] 
                 -> MVar OutMessageQueue -> Either a () -> IO()
