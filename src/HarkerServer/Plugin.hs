@@ -14,6 +14,7 @@ import Debug.Trace
 import HarkerIRC.Types
 import HarkerServer.Types
 import Network
+import System.Cmd
 import System.Directory
 import System.Exit
 import System.IO
@@ -25,36 +26,69 @@ closeplugins pl = readMVar pl
                                            (ShutdownException ""))
 
 startPluginThread :: MVar [Plugin] -> MVar Status -> MVar OutMessageQueue 
-                  -> IO ThreadId
-startPluginThread pl cs mq = do
+                  -> FilePath -> IO ThreadId
+startPluginThread pl cs mq pd = do
         putMVar cs Starting
-        tid <- forkFinally (pluginListener pl mq cs) 
-            (\_ -> putStrLn "Stopping plugin thread" >> closeplugins pl 
-                   >> takeMVar cs >> putMVar cs Dead)
+        tid <- forkFinally (pluginListener pl mq cs pd) 
+            (\e -> putStrLn "Stopping plugin thread" >> closeplugins pl 
+                   >> takeMVar cs >> putMVar cs Dead >> putStrLn
+                   ("stoped by: " ++ show e))
         v <- readMVar cs
         if isRunning v then return tid
         else hPutStr stderr ("Couldn't open " ++ unixaddr) >> exitFailure
 
 pluginListener :: MVar [Plugin] -> MVar OutMessageQueue -> MVar Status 
-               -> IO ()
-pluginListener pl mq status = do
+               -> FilePath -> IO ()
+pluginListener pl mq status plugdir = do
     printf "Starting Plugin Thread\n"
-    bracket (connectUnixPlugin pl status mq) (sClose . pluginSock) 
+    bracket (connectUnixPlugin pl status mq plugdir) (sClose . pluginSock) 
             (`runPluginThread` pluginThread)
 
 unixaddr = "/tmp/.harker-server.sock"
 unixSocket = UnixSocket unixaddr
 
 connectUnixPlugin :: MVar [Plugin] -> MVar Status -> MVar OutMessageQueue 
-                  -> IO PluginCore
-connectUnixPlugin p s mq = do
+                  -> FilePath -> IO PluginCore
+connectUnixPlugin p s mq pd = do
     fe <- doesFileExist unixaddr
     when fe $ removeFile unixaddr 
     r <- PluginCore p s mq <$> listenOn unixSocket
     putStrLn $ unixaddr ++ " opened"
     _ <- takeMVar  s
     putMVar s Running
+    startPluginDir pd
     return r
+
+startPluginDir :: FilePath -> IO ()
+startPluginDir dir = do
+    contents <- getDirectoryContents dir `catch` dirError
+                >>= filterM permFilter 
+    statusList <- mapM startExternPlugin contents
+    mapM_ reportStatus statusList
+ where
+    permFilter :: FilePath -> IO Bool
+    permFilter = liftM executable . getPermissions . (++) dir . (++) "/"
+
+    startExternPlugin :: FilePath -> IO (String, Maybe String)
+    startExternPlugin p =
+        ( system (dir ++ "/" ++ p) >>= 
+          \c -> return $ case c of
+            ExitSuccess -> (p, Nothing)
+            _           -> (p, Just "failed to start")
+        ) `catch` cmdError p
+
+    reportStatus :: (String, Maybe String) -> IO ()
+    reportStatus (name, Nothing) = putStrLn $ name ++ " successfully started"
+    reportStatus (name, Just e)  = putStrLn $ name ++ " could not start: " 
+                                                   ++ e
+                                                       
+    dirError :: SomeException -> IO [FilePath]
+    dirError e = do
+        putStrLn $ "Could not open dir: " ++ show e
+        return []
+
+    cmdError :: FilePath -> SomeException -> IO (FilePath, Maybe String)
+    cmdError p e = return (p, Just (show e))
 
 pluginFromHandle :: Handle -> MVar [Plugin] -> MVar OutMessageQueue -> IO ()
 pluginFromHandle h pl mq = do

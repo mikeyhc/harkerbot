@@ -9,8 +9,17 @@ data CmdFlag
     | SetPort String
     | SetChan String
     | SetMaxLine String
+    | SetPlugDir String
 
-type OptSet         = (String, String, String, Int, String, Int)
+data OptSet = OptSet 
+    { optSetNick     :: String
+    , optSetPass     :: String
+    , optSetServer   :: String
+    , optSetPort     :: Int
+    , optSetChan     :: String
+    , optSetMaxLines :: Int
+    , optSetPlugDir  :: String
+    }
 
 defpass      = "harkerpass"
 defserver    = "segfault.net.nz"
@@ -18,23 +27,27 @@ defport      = 6667
 defchan      = "#bots"
 defnick      = "harker"
 defmaxlines  = 7
+defplugdir   = "plugins"
 
-options = [Option ['n'] []  (ReqArg SetNick "NICK")
+options = [Option "n" []  (ReqArg SetNick "NICK")
             "Set the default nick for the bot"
-          ,Option ['p'] []  (ReqArg SetPass "PASS")
+          ,Option "p" []  (ReqArg SetPass "PASS")
             "Set the authentication password"
-          ,Option ['H'] []  (ReqArg SetServer "HOST")  
+          ,Option "H" []  (ReqArg SetServer "HOST")  
             "Sets the host to connect to"
-          ,Option ['P'] []  (ReqArg SetPort "PORT")
+          ,Option "P" []  (ReqArg SetPort "PORT")
             "Sets the port to connect on"
-          ,Option ['c'] []  (ReqArg SetChan "CHANNEL")
+          ,Option "c" []  (ReqArg SetChan "CHANNEL")
             "Sets the channel to connect to"
-          ,Option ['m'] []  (ReqArg SetMaxLine "MAXLINES") 
+          ,Option "m" []  (ReqArg SetMaxLine "MAXLINES") 
             "Set the maximum lines printed in a public channel"
+          ,Option "d" []  (ReqArg SetPlugDir "PLUGINDIR")
+            "Sets the directory to automatically load plugins from"
           ]
 
 emptyOptSet :: OptSet
-emptyOptSet = (defnick, defpass, defserver, defport, defchan, defmaxlines)
+emptyOptSet = OptSet defnick defpass defserver defport defchan defmaxlines 
+                     defplugdir
 
 parseopts :: [String] -> Either String OptSet
 parseopts argv = case getOpt Permute options argv of 
@@ -42,17 +55,11 @@ parseopts argv = case getOpt Permute options argv of
     (_,    _, errs) -> Left $ concat errs ++ usageInfo header options
     where header = "Usage: harker-server [OPTIONS..]"
 
-_first  g (a, b, c, d, e, f) = (g a, b, c, d, e, f)
-_second g (a, b, c, d, e, f) = (a, g b, c, d, e, f)
-_third  g (a, b, c, d, e, f) = (a, b, g c, d, e, f)
-_fourth g (a, b, c, d, e, f) = (a, b, c, g d, e, f)
-_fifth  g (a, b, c, d, e, f) = (a, b, c, d, g e, f)
-_sixth  g (a, b, c, d, e, f) = (a, b, c, d, e, g f)
-
 parsearg :: CmdFlag -> OptSet -> OptSet
-parsearg (SetNick x)    = _first  (const x)
-parsearg (SetPass x)    = _second (const x)
-parsearg (SetServer x)  = _third  (const x)
-parsearg (SetPort x)    = _fourth (const $ read x)
-parsearg (SetChan x)    = _fifth  (const x)
-parsearg (SetMaxLine x) = _sixth  (const $ read x)
+parsearg (SetNick x)    o = o { optSetNick     =      x }
+parsearg (SetPass x)    o = o { optSetPass     =      x }
+parsearg (SetServer x)  o = o { optSetServer   =      x }
+parsearg (SetPort x)    o = o { optSetPort     = read x }
+parsearg (SetChan x)    o = o { optSetChan     =      x }
+parsearg (SetMaxLine x) o = o { optSetMaxLines = read x }
+parsearg (SetPlugDir x) o = o { optSetPlugDir  =      x }

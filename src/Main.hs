@@ -38,12 +38,12 @@ main = do
             hPutStr stderr msg
             exitFailure
         Right o  -> bracket 
-            (startPluginThread pl cs mq >>= connect o pl cs)
+            (startPluginThread pl cs mq (optSetPlugDir o) >>= connect o pl cs)
             (hClose . socket) 
             ((flip $ runbot brain) run)
 
 connect :: OptSet -> MVar [Plugin] -> MVar Status -> ThreadId -> IO BotCore
-connect (n, pa, s, po, c, m) pl cs tid = notify s po $ do
+connect (OptSet n pa s po c m _) pl cs tid = notify s po $ do
         t <- getClockTime
         h <- connectTo s (PortNumber (fromIntegral po))
         hSetBuffering h NoBuffering
@@ -140,6 +140,8 @@ helpList :: [String]
 helpList = 
     [ "!hauth <password>: authenticate with harkerbot"
     , "!help:             this dialog"
+    , "!help <plugin>:    get help on a plugin"
+    , "                   (if available)"
     , "!hunauth:          unauthenticate with harkerbot"
     , "!id <statement>:   echo <statement>"
     , "!pingalert:        print a message in the default"
