@@ -23,7 +23,7 @@ import Text.Printf
 closeplugins :: MVar [Plugin] -> IO ()
 closeplugins pl = readMVar pl 
                   >>= mapM_ (\p -> throwTo (pluginThreadId p) 
-                                           (ShutdownException ""))
+                                           (ShutdownException Nothing))
 
 startPluginThread :: MVar [Plugin] -> MVar Status -> MVar OutMessageQueue 
                   -> FilePath -> IO ThreadId
@@ -133,8 +133,8 @@ getMore h = do
 
 loopfunc a = a >> threadDelay 500 >> loopfunc a
 
-shutdownHandler :: (Exception a) => String -> MVar [Plugin] 
-                -> MVar OutMessageQueue -> Either a () -> IO()
+shutdownHandler :: String -> MVar [Plugin] -> MVar OutMessageQueue 
+                -> Either SomeException () -> IO()
 shutdownHandler n pl mq e = do
     l <- takeMVar pl
     let (el, l') = removeElement (\x -> n == pluginName x) l 
@@ -146,21 +146,24 @@ shutdownHandler n pl mq e = do
                       >> hIsOpen h >>= \isOpen -> when isOpen $ hClose h;
         _                 -> return () }
     case e of
-        Left err -> 
-            if checkException err (ShutdownException "") then do
-                msg <- case el of {
-                    Just _ -> do {
-                        putStrLn $ n ++ " successfully unpluged";
-                        mkMessage err $ n ++ " successfully unpluged" };
-                    _      -> do {
-                        putStrLn $ "could not find plugin " ++ n;
-                        mkMessage err "Could not find plugin" } }
-                modifyMVar_ mq (return . (++ [msg]))
-            else putStrLn $ n ++ " exception: " ++ show err
+        Left err -> handleException err el
         Right _  -> putStrLn $ n ++ " exited unexpectedly"
-    where
-        checkException e r = show e == show r
-        mkMessage x = return . IRCOutPrivMsg "#bots" "#bots" -- fix this
+  where
+    mkMessage x = return . IRCOutPrivMsg x x -- fix this
+
+    handleException :: SomeException -> Maybe Plugin -> IO ()
+    handleException e el =
+        case fromException e of
+            Just (ShutdownException (Just chan)) -> do
+                msg <- case el of 
+                    Just _ -> do 
+                        putStrLn $ n ++ " successfully unpluged"
+                        mkMessage chan $ n ++ " successfully unpluged"
+                    _      -> do 
+                        putStrLn $ "could not find plugin " ++ n;
+                        mkMessage chan "Could not find plugin" 
+                modifyMVar_ mq (return . (++ [msg]))
+            _ -> putStrLn $ n ++ " exception: " ++ show e
 
 removeElement :: (a -> Bool) -> [a] -> (Maybe a, [a])
 removeElement f []     = (Nothing, [])
@@ -213,7 +216,7 @@ unplug c n = do
             unplug' n []                = return . Just $ failmsg n
             unplug' n (x:xs)
                 | n == pluginName x     =
-                    throwTo (pluginThreadId x) (ShutdownException c) 
+                    throwTo (pluginThreadId x) (ShutdownException (Just c)) 
                     >> return Nothing
                 | otherwise = unplug' n xs
 

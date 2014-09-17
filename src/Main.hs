@@ -208,7 +208,7 @@ quitfunc s = do
     write "QUIT" (":" ++ s) 
     m <- gets plugins
     tid <- asks plugintid
-    liftIO . throwTo tid $ ShutdownException ""
+    liftIO . throwTo tid $ ShutdownException Nothing
     liftIO $ putStrLn "waiting for plugins to disconnect"
     liftIO . loopfunc $ do
         r <- readMVar m

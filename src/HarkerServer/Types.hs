@@ -40,7 +40,7 @@ data TimeOutException = TimeOutException
     deriving (Show, Typeable)
 instance Exception TimeOutException
 data ShutdownException = ShutdownException 
-    { shutdownChannel :: String
+    { shutdownChannel :: Maybe String
     } deriving (Typeable)
 
 instance Exception ShutdownException
