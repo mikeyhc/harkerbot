@@ -78,6 +78,7 @@ hWrite h s m = do
 listen :: Handle -> Bot ()
 listen h = do
     v <- gets messagequeue
+    liftIO $ hSetEncoding stdout utf8
     liftIO . forkIO $ echoThread h v
     loopfunc $ do
         cs <- gets childstatus 
