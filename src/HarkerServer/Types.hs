@@ -23,11 +23,11 @@ data BotCore  = BotCore { socket    :: Handle
                         , maxlines  :: Int
                         }
 data BotBrain = BotBrain { botauth      :: Maybe User
-                         , honkslam     :: Bool
                          , pingalert    :: Bool
                          , plugins      :: MVar [Plugin]
                          , childstatus  :: MVar Status
                          , messagequeue :: MVar OutMessageQueue
+                         , ignorelist   :: [Nick]
                          }
 data PluginCore = PluginCore { pluginVar      :: MVar [Plugin]
                              , statusVar      :: MVar Status
@@ -74,4 +74,4 @@ emptyBrain = do
     v <- newMVar []
     d <- newEmptyMVar
     c <- newMVar []
-    return $ BotBrain Nothing False False v d c
+    return $ BotBrain Nothing False v d c []

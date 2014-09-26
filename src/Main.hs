@@ -98,7 +98,10 @@ listen h = do
                         emsg <- parseRawIRC s 
                         case emsg of
                             Left  a -> evalsys a
-                            Right b -> evalpriv b
+                            Right b -> do   
+                                il <- gets ignorelist
+                                unless (isJust $ find (== ircNick b) il) 
+                                    $ evalpriv b
     where
         loopfunc a = a >> loopfunc a
         ping = ("PING :" `isPrefixOf`)
@@ -145,10 +148,12 @@ helpList =
     , "                   (if available)"
     , "!hunauth:          unauthenticate with harkerbot"
     , "!id <statement>:   echo <statement>"
+    , "!ignore <nick>:    ignore messages from user"
     , "!pingalert:        print a message in the default"
     , "                   channel when a ping is recieved"
     , "!plugins:          list all current plugins"
     , "!quit:             force harkerbot to shutdown"
+    , "!unignore <nick>:  start listening to user again"
     , "!unplug:           remove a plugin"
     , "!uptime:           show how long harkerbot has been"
     , "                   running"
@@ -156,20 +161,24 @@ helpList =
 
 evalpriv :: IRCInPrivMsg -> Bot ()
 evalpriv msg
-    | m == "!quit"              = runauth n u c (quitfunc "Exiting")
-    | m == "!uptime"            = uptime >>= privmsg n c
-    | m == "!pingalert"         = runauth n u c (togglepingalert n u c)
-    | m == "!hauth"             = privmsg n c "needs a password idiot"
-    | m == "!plugins"           = pluginList >>= mapM_ (privmsg n c)
-    | m == "!help"              = mapM_ (privmsg n c) helpList
-    | "!help " `isPrefixOf` m   = pluginHelp msg (drop 6 m)
-    | "!unplug " `isPrefixOf` m = runauth n u c (unplug c (drop 8 m)
-                                                >>= \x -> maybe (return ())
-                                                           (privmsg n c) x)
-    | "!hauth " `isPrefixOf` m  = auth u (drop 7 m) >>= privmsg n c
-    | m == "!hunauth"           = runauth n u c (unauth n u c)
-    | "!id " `isPrefixOf` m     = privmsg n c (drop 4 m)
-    | otherwise                 = pluginBroadcast msg
+    | m == "!quit"                = runauth n u c (quitfunc "Exiting")
+    | m == "!uptime"              = uptime >>= privmsg n c
+    | m == "!pingalert"           = runauth n u c (togglepingalert n u c)
+    | m == "!hauth"               = privmsg n c "needs a password idiot"
+    | m == "!plugins"             = pluginList >>= mapM_ (privmsg n c)
+    | m == "!help"                = mapM_ (privmsg n c) helpList
+    | "!help " `isPrefixOf` m     = pluginHelp msg (drop 6 m)
+    | "!unplug " `isPrefixOf` m   = runauth n u c (unplug c (drop 8 m)
+                                                  >>= \x -> maybe (return ())
+                                                            (privmsg n c) x)
+    | "!hauth " `isPrefixOf` m    = auth u (drop 7 m) >>= privmsg n c
+    | m == "!hunauth"             = runauth n u c (unauth n u c)
+    | "!id " `isPrefixOf` m       = privmsg n c (drop 4 m)
+    | "!ignore " `isPrefixOf` m   = runauth n u c (ignore (drop 8 m)
+                                                  >>= privmsg n c)
+    | "!unignore " `isPrefixOf` m = runauth n u c (unignore (drop 10 m)
+                                                  >>= privmsg n c)
+    | otherwise                   = pluginBroadcast msg
     where
         n = ircNick msg
         m = ircMsg  msg
@@ -220,8 +229,8 @@ togglepingalert n u c = do
     p <- not <$> gets pingalert
     modify (toggleping p)
     privmsg n c $ "pingalert is now " ++ if p then "on" else "off"
-    where
-        toggleping p x = x { pingalert = p }
+  where
+    toggleping p x = x { pingalert = p }
 
 privmsg :: Nick -> Chan -> Message -> Bot ()
 privmsg n c s = write "PRIVMSG" $ if head c == '#' then c ++ " :" ++ s
@@ -234,6 +243,24 @@ hPrivmsg h n c s = hWrite h "PRIVMSG" $ if head c == '#' then c ++ " :" ++ s
 checkReg :: String -> Bool
 checkReg = (==) "You have not registered"
 
+ignore :: Nick -> Bot String
+ignore n = do
+    il <- gets ignorelist
+    case find (== n) il of
+        Nothing -> modify (addIgnore il) >> return "user ignored"
+        _       -> return "user already ignored"
+  where
+    addIgnore il x = x { ignorelist = n:il }
+
+unignore :: Nick -> Bot String
+unignore n = do
+    il <- gets ignorelist
+    case find (== n) il of
+        Nothing -> return "user not ignored"
+        _       -> modify (rmIgnore il) >> return "user unignored"
+  where
+    rmIgnore il x = x { ignorelist = filter (/= n) il }
+
 uptime :: Bot String
 uptime = do
     now  <- liftIO getClockTime
@@ -244,12 +271,12 @@ prettyClockDiff :: TimeDiff -> String
 prettyClockDiff td =
     unwords $ map (uncurry (++) . first show) $
     if null diffs then [(0, "s")] else diffs
-    where
-        merge (tot, acc) (sec, typ) = let (sec', tot') = divMod tot sec
-                                      in  (tot', (sec', typ):acc)
-        metrics = [(86400,"d"), (3600,"h"), (60, "m"), (1, "s")]
-        diffs = filter ((/= 0) . fst) $ reverse $ snd $
-                foldl' merge (tdSec td, []) metrics
+  where
+    merge (tot, acc) (sec, typ) = let (sec', tot') = divMod tot sec
+                                  in  (tot', (sec', typ):acc)
+    metrics = [(86400,"d"), (3600,"h"), (60, "m"), (1, "s")]
+    diffs = filter ((/= 0) . fst) $ reverse $ snd $
+            foldl' merge (tdSec td, []) metrics
 
 auth :: User -> String -> Bot String
 auth u p = do
