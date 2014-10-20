@@ -157,8 +157,8 @@ shutdownHandler n pl mq e = do
             Just (ShutdownException (Just chan)) -> do
                 msg <- case el of 
                     Just _ -> do 
-                        putStrLn $ n ++ " successfully unpluged"
-                        mkMessage chan $ n ++ " successfully unpluged"
+                        putStrLn $ n ++ " successfully unplugged"
+                        mkMessage chan $ n ++ " successfully unplugged"
                     _      -> do 
                         putStrLn $ "could not find plugin " ++ n;
                         mkMessage chan "Could not find plugin" 
