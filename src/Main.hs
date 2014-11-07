@@ -45,6 +45,7 @@ main = do
               -> ThreadId -> SomeException -> IO ()
     reconnect brain core o pl cs ptid exn = do
         hPrint stderr exn
+        threadDelay 1000000
         hClose $ socket core
         newcore <- connect o pl cs ptid
         let newcore' = newcore { starttime = starttime core }
