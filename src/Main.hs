@@ -34,13 +34,24 @@ main = do
         cs = childstatus brain
         mq = messagequeue brain
     case opts of 
-        Left msg -> do  
-            hPutStr stderr msg
-            exitFailure
-        Right o  -> bracket 
-            (startPluginThread pl cs mq (optSetPlugDir o) >>= connect o pl cs)
-            (hClose . socket) 
-            ((flip $ runbot brain) run)
+        Left msg -> hPutStr stderr msg >> exitFailure
+        Right o  -> do
+            ptid <- startPluginThread pl cs mq (optSetPlugDir o) 
+            core <- connect o pl cs ptid 
+            runFunc brain core `catch` reconnect brain core o pl cs ptid
+            hClose $ socket core
+  where
+    reconnect :: BotBrain -> BotCore -> OptSet -> MVar [Plugin] -> MVar Status
+              -> ThreadId -> SomeException -> IO ()
+    reconnect brain core o pl cs ptid exn = do
+        hPrint stderr exn
+        hClose $ socket core
+        newcore <- connect o pl cs ptid
+        let newcore' = newcore { starttime = starttime core }
+        runFunc brain newcore' `catch` reconnect brain newcore' o pl cs ptid
+
+runFunc :: BotBrain -> BotCore -> IO ()
+runFunc brain core = runbot brain core run
 
 connect :: OptSet -> MVar [Plugin] -> MVar Status -> ThreadId -> IO BotCore
 connect (OptSet n pa s po c m _) pl cs tid = notify s po $ do
