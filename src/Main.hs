@@ -27,6 +27,18 @@ import Text.Printf
 
 main :: IO ()
 main = do
+    fe <- doesFileExist unixaddr
+    if fe then hPutStrLn stderr "Server currently running (or stale socket)"
+          else ircConnect `catch` cleanup
+  where
+    cleanup :: SomeException -> IO ()
+    cleanup e = do
+        hPrint stderr e
+        fe <- doesFileExist unixaddr
+        when fe $ removeFile unixaddr
+
+ircConnect :: IO ()
+ircConnect = do
     opts <- fmap parseopts getArgs
     brain <- emptyBrain
     let pl = plugins brain
