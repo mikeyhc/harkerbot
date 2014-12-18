@@ -29,8 +29,7 @@ main :: IO ()
 main = do
     opts <- fmap parseopts getArgs
     brain <- emptyBrain
-    let
-        pl = plugins brain
+    let pl = plugins brain
         cs = childstatus brain
         mq = messagequeue brain
     case opts of 
@@ -197,11 +196,20 @@ evalpriv msg
         u = ircUser msg
         c = ircChan msg
 
+-- TODO: remove possibly dead threads
 pluginBroadcast :: IRCInPrivMsg -> Bot ()
 pluginBroadcast msg = do
     let mstr = foldl (\a b -> a ++ b ++ "\n") "" (toList msg) ++ "-"
     l <- gets plugins >>= liftIO . readMVar
-    liftIO $ mapM_ (sendmsg mstr . pluginHandle) l
+    liftIO $ mapM_ (mapfunc mstr) l
+  where
+    mapfunc :: String -> Plugin -> IO ()
+    mapfunc mstr x = void (sendmsg mstr (pluginHandle x))
+                `catch` mapExceptHandler (pluginName x)
+
+    mapExceptHandler :: String -> SomeException -> IO ()
+    mapExceptHandler name _ = hPutStrLn stderr $ "plugin: " ++ name 
+                                                 ++ " appears to be dead"
 
 pluginHelp :: IRCInPrivMsg -> String -> Bot ()
 pluginHelp msg name = do
@@ -222,8 +230,8 @@ evalsys :: IRCSystemMsg -> Bot ()
 evalsys msg 
     | checkReg m = ircInit
     | otherwise  = return ()
-    where
-        m = getIRCSysMsg msg
+  where
+    m = getIRCSysMsg msg
 
 quitfunc :: Message -> Bot ()
 quitfunc s = do 
